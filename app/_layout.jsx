@@ -48,15 +48,7 @@ import {
   query,
   setDoc,
 } from "firebase/firestore";
-
-const firebaseConfig = {
-  apiKey: "AIzaSyD56GDUPaErJ-0_H5OdtItTqMpUdVvXlnY",
-  authDomain: "biztrack-e7367.firebaseapp.com",
-  projectId: "biztrack-e7367",
-  storageBucket: "biztrack-e7367.firebasestorage.app",
-  messagingSenderId: "405562628967",
-  appId: "1:405562628967:web:62420fa5abd83cfa45edc2",
-};
+import firebaseConfig from "../credentials.json";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);

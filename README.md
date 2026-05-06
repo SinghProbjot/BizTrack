@@ -26,7 +26,7 @@ graph TD
 
     UI --> Routing
     UI --> Icons
-    Frontend <-->|onSnapshot (Real-Time Synchronization & Offline Cache)| DB
+    Frontend <-->|"onSnapshot (Real-Time Synchronization & Offline Cache)"| DB
     Frontend <-->|Access Management (Hybrid/Guest)| Auth
 ```
 

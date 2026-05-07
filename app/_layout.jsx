@@ -30,10 +30,12 @@ import {
 } from "react-native";
 
 // --- FIREBASE IMPORTS ---
+import ReactNativeAsyncStorage from "@react-native-async-storage/async-storage";
 import { initializeApp } from "firebase/app";
 import {
   createUserWithEmailAndPassword,
-  getAuth,
+  getReactNativePersistence,
+  initializeAuth,
   onAuthStateChanged,
   signInAnonymously,
   signInWithEmailAndPassword,
@@ -51,7 +53,9 @@ import {
 import firebaseConfig from "../credentials.json";
 
 const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
+const auth = initializeAuth(app, {
+  persistence: getReactNativePersistence(ReactNativeAsyncStorage),
+});
 const db = getFirestore(app);
 const APP_ID = "biztrack-app";
 
@@ -78,7 +82,12 @@ export default function App() {
   const [isJobModalOpen, setIsJobModalOpen] = useState(false);
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
 
-  const [jobForm, setJobForm] = useState({ client: "", hours: "", income: "" });
+  const [jobForm, setJobForm] = useState({
+    client: "",
+    hours: "",
+    hourlyRate: "",
+    income: "",
+  });
   const [expenseForm, setExpenseForm] = useState({
     description: "",
     amount: "",
@@ -250,7 +259,7 @@ export default function App() {
     setSelectedDay(
       new Date(currentDate.getFullYear(), currentDate.getMonth(), day),
     );
-    setJobForm({ client: "", hours: "", income: "" });
+    setJobForm({ client: "", hours: "", hourlyRate: "", income: "" });
     setIsJobModalOpen(true);
   };
 
@@ -265,8 +274,11 @@ export default function App() {
         {
           date: dateStr,
           client: jobForm.client,
-          hours: Number(jobForm.hours),
-          income: Number(jobForm.income),
+          hours: Number(jobForm.hours?.replace(",", ".") || 0),
+          hourlyRate: jobForm.hourlyRate
+            ? Number(jobForm.hourlyRate.replace(",", "."))
+            : null,
+          income: Number(jobForm.income?.replace(",", ".") || 0),
           createdAt: new Date().toISOString(),
         },
       );
@@ -812,20 +824,59 @@ export default function App() {
                   keyboardType="numeric"
                   placeholder="8"
                   value={jobForm.hours}
-                  onChangeText={(t) => setJobForm({ ...jobForm, hours: t })}
+                  onChangeText={(t) => {
+                    const newHours = t.replace(",", ".");
+                    const rateNum = parseFloat(
+                      jobForm.hourlyRate?.replace(",", "."),
+                    );
+                    const hoursNum = parseFloat(newHours);
+                    let newIncome = jobForm.income;
+                    if (!isNaN(rateNum) && !isNaN(hoursNum)) {
+                      newIncome = (rateNum * hoursNum).toFixed(2);
+                    }
+                    setJobForm({
+                      ...jobForm,
+                      hours: t,
+                      income: newIncome ? String(newIncome) : "",
+                    });
+                  }}
                 />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>COMPENSO (€)</Text>
+                <Text style={styles.inputLabel}>PAGA ORARIA (€)</Text>
                 <TextInput
                   style={styles.input}
                   keyboardType="numeric"
-                  placeholder="150"
-                  value={jobForm.income}
-                  onChangeText={(t) => setJobForm({ ...jobForm, income: t })}
+                  placeholder="15"
+                  value={jobForm.hourlyRate}
+                  onChangeText={(t) => {
+                    const newRate = t.replace(",", ".");
+                    const hoursNum = parseFloat(
+                      jobForm.hours?.replace(",", "."),
+                    );
+                    const rateNum = parseFloat(newRate);
+                    let newIncome = jobForm.income;
+                    if (!isNaN(rateNum) && !isNaN(hoursNum)) {
+                      newIncome = (rateNum * hoursNum).toFixed(2);
+                    }
+                    setJobForm({
+                      ...jobForm,
+                      hourlyRate: t,
+                      income: newIncome ? String(newIncome) : "",
+                    });
+                  }}
                 />
               </View>
             </View>
+
+            <Text style={styles.inputLabel}>COMPENSO TOTALE (€)</Text>
+            <TextInput
+              style={styles.input}
+              keyboardType="numeric"
+              placeholder="150"
+              value={jobForm.income}
+              onChangeText={(t) => setJobForm({ ...jobForm, income: t })}
+            />
 
             <TouchableOpacity style={styles.submitBtn} onPress={handleSaveJob}>
               <Text style={styles.submitBtnText}>Salva Lavoro</Text>

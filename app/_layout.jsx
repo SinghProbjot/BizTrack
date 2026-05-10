@@ -31,12 +31,14 @@ import {
 
 // --- FIREBASE IMPORTS ---
 import ReactNativeAsyncStorage from "@react-native-async-storage/async-storage";
+import { Image } from "expo-image";
 import { initializeApp } from "firebase/app";
 import {
   createUserWithEmailAndPassword,
   getReactNativePersistence,
   initializeAuth,
   onAuthStateChanged,
+  sendPasswordResetEmail,
   signInAnonymously,
   signInWithEmailAndPassword,
   signOut,
@@ -50,7 +52,15 @@ import {
   query,
   setDoc,
 } from "firebase/firestore";
-import firebaseConfig from "../credentials.json";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+const firebaseConfig = {
+  apiKey: "YOUR-API-HERE",
+  authDomain: "YOURDOMAIN.firebaseapp.com",
+  projectId: "biztrack-ID",
+  storageBucket: "biztrack-ID.firebasestorage.app",
+  messagingSenderId: "405562628967",
+  appId: "1:405562628967:web:62420fa5abd83cfa45edc2",
+};
 
 const app = initializeApp(firebaseConfig);
 const auth = initializeAuth(app, {
@@ -67,10 +77,13 @@ export default function App() {
   const [isAuthLoading, setIsAuthLoading] = useState(true);
 
   // Auth Form State
+  const insets = useSafeAreaInsets();
+
   const [isRegistering, setIsRegistering] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authError, setAuthError] = useState("");
+  const [authSuccess, setAuthSuccess] = useState("");
   const [isProcessingAuth, setIsProcessingAuth] = useState(false);
 
   // --- DATA STATE ---
@@ -212,6 +225,31 @@ export default function App() {
     }
   };
 
+  const handleForgotPassword = async () => {
+    if (!email) {
+      setAuthError("Inserisci la tua email per reimpostare la password.");
+      return;
+    }
+    setIsProcessingAuth(true);
+    setAuthError("");
+    setAuthSuccess("");
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setAuthSuccess("Email di ripristino inviata! Controlla la tua casella.");
+    } catch (error) {
+      if (
+        error.code === "auth/user-not-found" ||
+        error.code === "auth/invalid-credential"
+      )
+        setAuthError("Nessun account trovato con questa email.");
+      else if (error.code === "auth/invalid-email")
+        setAuthError("Formato email non valido.");
+      else setAuthError("Errore nell'invio dell'email. Riprova.");
+    } finally {
+      setIsProcessingAuth(false);
+    }
+  };
+
   const handleLogout = async () => {
     try {
       await signOut(auth);
@@ -339,9 +377,11 @@ export default function App() {
     <SafeAreaView style={styles.authContainer}>
       <View style={styles.authContent}>
         <View style={styles.authHeader}>
-          <View style={styles.authIconWrapper}>
-            <Briefcase color="white" size={40} />
-          </View>
+          <Image
+            source={require("../assets/images/icon.png")}
+            style={styles.logoImage}
+            contentFit="contain"
+          />
           <Text style={styles.authTitle}>BizTrack</Text>
           <Text style={styles.authSubtitle}>
             Gestisci il tuo lavoro, ovunque.
@@ -355,6 +395,9 @@ export default function App() {
 
           {authError ? (
             <Text style={styles.authErrorText}>{authError}</Text>
+          ) : null}
+          {authSuccess ? (
+            <Text style={styles.authSuccessText}>{authSuccess}</Text>
           ) : null}
 
           <View style={styles.inputContainer}>
@@ -394,11 +437,24 @@ export default function App() {
             )}
           </TouchableOpacity>
 
+          {!isRegistering && (
+            <TouchableOpacity
+              style={styles.authForgotBtn}
+              onPress={handleForgotPassword}
+              disabled={isProcessingAuth}
+            >
+              <Text style={styles.authForgotBtnText}>
+                Password dimenticata?
+              </Text>
+            </TouchableOpacity>
+          )}
+
           <TouchableOpacity
             style={styles.authToggleBtn}
             onPress={() => {
               setIsRegistering(!isRegistering);
               setAuthError("");
+              setAuthSuccess("");
             }}
           >
             <Text style={styles.authToggleBtnText}>
@@ -488,7 +544,16 @@ export default function App() {
         <View style={styles.header}>
           <View style={styles.headerTop}>
             <View style={{ flexDirection: "row", alignItems: "center" }}>
-              <Briefcase color="white" size={24} style={{ marginRight: 8 }} />
+              <Image
+                source={require("../assets/images/icon.png")}
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 8,
+                  marginRight: 8,
+                }}
+                contentFit="contain"
+              />
               <Text style={styles.headerTitle}>BizTrack</Text>
             </View>
             <View style={styles.userBadge}>
@@ -738,7 +803,12 @@ export default function App() {
       </View>
 
       {/* Bottom Navigation */}
-      <View style={styles.bottomNav}>
+      <View
+        style={[
+          styles.bottomNav,
+          { paddingBottom: Math.max(insets.bottom, 12) },
+        ]}
+      >
         <TouchableOpacity
           style={styles.navItem}
           onPress={() => setActiveTab("calendar")}
@@ -1009,6 +1079,27 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: 14,
   },
+  authSuccessText: {
+    color: "#16a34a",
+    marginBottom: 16,
+    textAlign: "center",
+    fontSize: 14,
+  },
+  logoImage: {
+    width: 96,
+    height: 96,
+    borderRadius: 22,
+    marginBottom: 16,
+  },
+  authForgotBtn: {
+    marginTop: 12,
+    alignItems: "center",
+  },
+  authForgotBtnText: {
+    color: "#b45309",
+    fontSize: 14,
+    fontWeight: "600",
+  },
   inputContainer: {
     flexDirection: "row",
     alignItems: "center",
@@ -1247,7 +1338,6 @@ const styles = StyleSheet.create({
     right: 0,
     flexDirection: "row",
     backgroundColor: "white",
-    paddingBottom: Platform.OS === "ios" ? 24 : 12,
     paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: "#f1f5f9",

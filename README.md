@@ -127,8 +127,7 @@ The project uses Expo Application Services (EAS) for native compilation.
    eas build -p ios
    ```
 
-Open this link on your Android devices (or scan the QR code) to install the app:
-https://expo.dev/accounts/probjot/projects/BizTrack/builds/2dd80546-089d-4fc6-8733-2e41ab9850c6
+_SEE RELEASES TO DOWNLOAD APK._
 
 ## Credits
 

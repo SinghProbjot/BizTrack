@@ -1,15 +1,21 @@
 import {
+  AlertTriangle,
   ArrowLeft,
   Banknote,
+  Bell,
   Briefcase,
   Calendar,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Clock,
   FileDown,
   Lock,
   LogOut,
   Mail,
+  Pencil,
   Plus,
+  Trash2,
   TrendingUp,
   User as UserIcon,
   Users,
@@ -106,6 +112,17 @@ const REPORT_CARDS = [
   { id: "balance",     title: "Bilancio Completo",  desc: "Confronto entrate e costi mese per mese",       color: "#8b5cf6" },
 ];
 
+const DEADLINE_CATEGORIES = [
+  { id: "assic",  name: "Assicurazione",  emoji: "🛡️", color: "#3b82f6" },
+  { id: "revis",  name: "Revisione",      emoji: "🔍", color: "#f59e0b" },
+  { id: "bollo",  name: "Bollo",          emoji: "📋", color: "#8b5cf6" },
+  { id: "rata",   name: "Rata/Leasing",   emoji: "💳", color: "#ef4444" },
+  { id: "patent", name: "Patente",        emoji: "🪪", color: "#22c55e" },
+  { id: "manu",   name: "Manutenzione",   emoji: "🔧", color: "#f97316" },
+  { id: "tasse",  name: "Tasse/Imposte",  emoji: "🏛️", color: "#64748b" },
+  { id: "altro",  name: "Altro",          emoji: "📌", color: "#94a3b8" },
+];
+
 const MONTH_NAMES = [
   "Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno",
   "Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre",
@@ -132,6 +149,14 @@ export default function App() {
   const [jobs, setJobs] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [customCategories, setCustomCategories] = useState([]);
+  const [deadlines, setDeadlines] = useState([]);
+
+  // Deadlines modal
+  const [isDeadlineModalOpen, setIsDeadlineModalOpen] = useState(false);
+  const [editingDeadline, setEditingDeadline] = useState(null);
+  const [deadlineForm, setDeadlineForm] = useState({
+    title: "", category: "Assicurazione", dueDate: new Date(), notes: "", recurring: "none",
+  });
 
   // Navigation
   const [activeTab, setActiveTab] = useState("calendar");
@@ -141,9 +166,17 @@ export default function App() {
   // Job calendar
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDay, setSelectedDay] = useState(null);
+  const [isDayDetailOpen, setIsDayDetailOpen] = useState(false);
   const [isJobModalOpen, setIsJobModalOpen] = useState(false);
+  const [editingJob, setEditingJob] = useState(null);
   const [showClientSugg, setShowClientSugg] = useState(false);
-  const [jobForm, setJobForm] = useState({ client: "", hours: "", hourlyRate: "", income: "" });
+  const [jobForm, setJobForm] = useState({
+    client: "", hours: "", hourlyRate: "", income: "",
+    jobExpenses: [],   // [{id, description, amount}]
+    extraIncome: [],   // [{id, description, amount}]
+  });
+  const [newJobExpense, setNewJobExpense] = useState({ description: "", amount: "" });
+  const [newExtraIncome, setNewExtraIncome] = useState({ description: "", amount: "" });
 
   // Expense calendar
   const [expCalDate, setExpCalDate] = useState(new Date());
@@ -191,12 +224,13 @@ export default function App() {
   }, []);
 
   React.useEffect(() => {
-    if (!user) { setJobs([]); setExpenses([]); setCustomCategories([]); return; }
+    if (!user) { setJobs([]); setExpenses([]); setCustomCategories([]); setDeadlines([]); return; }
     const base = (col) => collection(db, "artifacts", APP_ID, "users", user.uid, col);
     const unJ = onSnapshot(query(base("jobs")), (s) => setJobs(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
     const unE = onSnapshot(query(base("expenses")), (s) => setExpenses(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
     const unC = onSnapshot(query(base("categories")), (s) => setCustomCategories(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
-    return () => { unJ(); unE(); unC(); };
+    const unD = onSnapshot(query(base("deadlines")), (s) => setDeadlines(s.docs.map((d) => ({ id: d.id, ...d.data() }))));
+    return () => { unJ(); unE(); unC(); unD(); };
   }, [user]);
 
   // ── Auth Actions ──────────────────────────────────────────────────────────
@@ -241,18 +275,53 @@ export default function App() {
   const docRef = (col, id) => doc(db, "artifacts", APP_ID, "users", uid(), col, id);
   const newId = () => Math.random().toString(36).substring(2, 15);
 
+  const openDayDetail = (day) => {
+    setSelectedDay(day);
+    setIsDayDetailOpen(true);
+  };
+
+  const openAddJob = () => {
+    setEditingJob(null);
+    setJobForm({ client:"", hours:"", hourlyRate:"", income:"", jobExpenses:[], extraIncome:[] });
+    setNewJobExpense({ description:"", amount:"" });
+    setNewExtraIncome({ description:"", amount:"" });
+    setShowClientSugg(false);
+    setIsJobModalOpen(true);
+  };
+
+  const openEditJob = (job) => {
+    setEditingJob(job);
+    setJobForm({
+      client: job.client || "",
+      hours: String(job.hours || ""),
+      hourlyRate: job.hourlyRate ? String(job.hourlyRate) : "",
+      income: String(job.income || ""),
+      jobExpenses: job.jobExpenses || [],
+      extraIncome: job.extraIncome || [],
+    });
+    setNewJobExpense({ description:"", amount:"" });
+    setNewExtraIncome({ description:"", amount:"" });
+    setShowClientSugg(false);
+    setIsJobModalOpen(true);
+  };
+
   const handleSaveJob = async () => {
     if (!user || !selectedDay) return;
+    const jobId = editingJob ? editingJob.id : newId();
     try {
-      await setDoc(docRef("jobs", newId()), {
+      await setDoc(docRef("jobs", jobId), {
         date: fmtDateStr(selectedDay),
         client: jobForm.client,
         hours: Number(jobForm.hours?.replace(",", ".") || 0),
         hourlyRate: jobForm.hourlyRate ? Number(jobForm.hourlyRate.replace(",", ".")) : null,
         income: Number(jobForm.income?.replace(",", ".") || 0),
-        createdAt: new Date().toISOString(),
+        jobExpenses: jobForm.jobExpenses,
+        extraIncome: jobForm.extraIncome,
+        createdAt: editingJob?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       });
       setIsJobModalOpen(false);
+      setEditingJob(null);
     } catch (e) { console.error(e); }
   };
 
@@ -289,35 +358,95 @@ export default function App() {
   const handleDeleteJob = async (id) => { try { await deleteDoc(docRef("jobs", id)); } catch (e) { console.error(e); } };
   const handleDeleteExpense = async (id) => { try { await deleteDoc(docRef("expenses", id)); } catch (e) { console.error(e); } };
 
+  const handleSaveDeadline = async () => {
+    if (!user || !deadlineForm.title.trim()) return;
+    const dlId = editingDeadline ? editingDeadline.id : newId();
+    try {
+      await setDoc(docRef("deadlines", dlId), {
+        title: deadlineForm.title.trim(),
+        category: deadlineForm.category,
+        dueDate: deadlineForm.dueDate instanceof Date ? deadlineForm.dueDate.toISOString().split("T")[0] : deadlineForm.dueDate,
+        notes: deadlineForm.notes.trim(),
+        recurring: deadlineForm.recurring,
+        createdAt: editingDeadline?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      setIsDeadlineModalOpen(false);
+      setEditingDeadline(null);
+      setDeadlineForm({ title:"", category:"Assicurazione", dueDate:new Date(), notes:"", recurring:"none" });
+    } catch (e) { console.error(e); }
+  };
+
+  const openEditDeadline = (dl) => {
+    setEditingDeadline(dl);
+    setDeadlineForm({
+      title: dl.title || "",
+      category: dl.category || "Assicurazione",
+      dueDate: dl.dueDate ? new Date(dl.dueDate) : new Date(),
+      notes: dl.notes || "",
+      recurring: dl.recurring || "none",
+    });
+    setIsDeadlineModalOpen(true);
+  };
+
+  const handleDeleteDeadline = async (id) => { try { await deleteDoc(docRef("deadlines", id)); } catch (e) { console.error(e); } };
+
   // ── PDF ───────────────────────────────────────────────────────────────────
 
   const periodLabel = (p) => ({ week:"Ultimi 7 giorni", month:"Questo mese", year:"Quest'anno", all:"Tutto il periodo" })[p] || "";
 
   const generateClientPDF = async (clientName) => {
     const cJobs = reportJobs.filter((j) => j.client === clientName).sort((a, b) => a.date.localeCompare(b.date));
-    const total = cJobs.reduce((s, j) => s + Number(j.income || 0), 0);
-    const hours = cJobs.reduce((s, j) => s + Number(j.hours || 0), 0);
+    const totalHours = cJobs.reduce((s, j) => s + Number(j.hours || 0), 0);
+    const grandTotal = cJobs.reduce((s, j) => {
+      const expTot = (j.jobExpenses || []).reduce((a, e) => a + Number(e.amount || 0), 0);
+      const extraTot = (j.extraIncome || []).reduce((a, e) => a + Number(e.amount || 0), 0);
+      return s + Number(j.income || 0) + extraTot + expTot;
+    }, 0);
+
+    const rows = cJobs.map((j) => {
+      const expItems = j.jobExpenses || [];
+      const extraItems = j.extraIncome || [];
+      const expTot = expItems.reduce((a, e) => a + Number(e.amount || 0), 0);
+      const extraTot = extraItems.reduce((a, e) => a + Number(e.amount || 0), 0);
+      const dayTotal = Number(j.income || 0) + extraTot + expTot;
+      return `
+        <tr class="day-hd"><td colspan="2">${new Date(j.date).toLocaleDateString("it-IT", { weekday:"long", day:"2-digit", month:"long" })}</td></tr>
+        <tr><td>🔨 Manodopera${j.hours ? ` — ${j.hours}h` : ""}${j.hourlyRate ? ` × €${Number(j.hourlyRate).toFixed(2)}/h` : ""}</td><td class="amt">€${Number(j.income || 0).toFixed(2)}</td></tr>
+        ${extraItems.map((e) => `<tr class="extra-row"><td>✅ ${e.description}</td><td class="amt pos">+€${Number(e.amount || 0).toFixed(2)}</td></tr>`).join("")}
+        ${expItems.map((e) => `<tr class="exp-row"><td>🧾 ${e.description}</td><td class="amt">€${Number(e.amount || 0).toFixed(2)}</td></tr>`).join("")}
+        ${(expItems.length > 0 || extraItems.length > 0) ? `<tr class="sub-tot"><td style="text-align:right;color:#64748b;font-size:11px">Totale giornata</td><td class="amt" style="font-weight:bold">€${dayTotal.toFixed(2)}</td></tr>` : ""}
+      `;
+    }).join("");
+
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-      body{font-family:Arial,sans-serif;margin:40px;color:#1e293b}
-      .hd{border-bottom:3px solid #b45309;padding-bottom:16px;margin-bottom:28px;display:flex;justify-content:space-between;align-items:flex-end}
-      .brand{font-size:26px;font-weight:bold;color:#b45309}
-      h2{color:#1e293b;margin:0 0 4px}
-      .sub{color:#64748b;font-size:13px}
-      table{width:100%;border-collapse:collapse;margin-top:20px}
-      th{background:#f1f5f9;color:#475569;font-size:11px;text-transform:uppercase;padding:10px;text-align:left;border:1px solid #e2e8f0}
-      td{padding:10px;border:1px solid #e2e8f0;font-size:13px}
-      tr:nth-child(even) td{background:#f8fafc}
-      .tot td{font-weight:bold;background:#fef3c7;color:#b45309}
-      .ft{margin-top:36px;font-size:11px;color:#94a3b8;text-align:center}
+      body{font-family:Arial,sans-serif;margin:36px;color:#1e293b;font-size:13px}
+      .hd{border-bottom:3px solid #b45309;padding-bottom:14px;margin-bottom:24px;display:flex;justify-content:space-between;align-items:flex-end}
+      .brand{font-size:24px;font-weight:bold;color:#b45309}
+      .sub{color:#64748b;font-size:12px}
+      h2{margin:0 0 4px;font-size:18px}
+      table{width:100%;border-collapse:collapse;margin-top:16px}
+      td{padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px}
+      .day-hd td{background:#f8fafc;font-weight:bold;font-size:13px;color:#1e293b;padding:10px;border-top:2px solid #e2e8f0;border-bottom:1px solid #e2e8f0}
+      .extra-row td{color:#16a34a}
+      .exp-row td{color:#475569}
+      .sub-tot td{background:#fef3c7;border-top:1px dashed #fcd34d}
+      .amt{text-align:right;white-space:nowrap}
+      .pos{color:#16a34a}
+      .grand-tot td{font-weight:bold;font-size:14px;background:#fef3c7;color:#b45309;border-top:2px solid #fcd34d;padding:10px}
+      .ft{margin-top:32px;font-size:10px;color:#94a3b8;text-align:center}
     </style></head><body>
-    <div class="hd"><div><div class="brand">BizTrack</div><div class="sub">Generato il ${new Date().toLocaleDateString("it-IT")}</div></div><div class="sub">${periodLabel(reportPeriod)}</div></div>
-    <h2>Report Cliente: ${clientName}</h2>
-    <p class="sub">Totale lavori: ${cJobs.length} &nbsp;|&nbsp; Ore lavorate: ${hours}h</p>
-    <table><thead><tr><th>Data</th><th>Ore</th><th>Tariffa/h</th><th>Compenso</th></tr></thead><tbody>
-    ${cJobs.map((j) => `<tr><td>${new Date(j.date).toLocaleDateString("it-IT")}</td><td>${j.hours}h</td><td>${j.hourlyRate ? `€${Number(j.hourlyRate).toFixed(2)}` : "—"}</td><td>€${Number(j.income).toFixed(2)}</td></tr>`).join("")}
-    <tr class="tot"><td colspan="3">TOTALE</td><td>€${total.toFixed(2)}</td></tr>
-    </tbody></table>
-    <div class="ft">Documento generato da BizTrack</div>
+    <div class="hd">
+      <div><div class="brand">BizTrack</div><div class="sub">Generato il ${new Date().toLocaleDateString("it-IT")}</div></div>
+      <div class="sub">${periodLabel(reportPeriod)}</div>
+    </div>
+    <h2>Prospetto per: ${clientName}</h2>
+    <p class="sub">Giornate: ${cJobs.length} &nbsp;|&nbsp; Ore totali: ${totalHours}h</p>
+    <table>
+      ${rows}
+      <tr class="grand-tot"><td>TOTALE DA FATTURARE</td><td class="amt">€${grandTotal.toFixed(2)}</td></tr>
+    </table>
+    <div class="ft">Documento generato da BizTrack — uso interno</div>
     </body></html>`;
     try {
       const { uri } = await Print.printToFileAsync({ html });
@@ -380,6 +509,18 @@ export default function App() {
     return expCalMonth.filter((e) => e.date === ds);
   }, [expCalMonth, selectedExpDay]);
 
+  const selectedDayJobs = useMemo(() => {
+    if (!selectedDay) return [];
+    const ds = fmtDateStr(selectedDay);
+    return currentMonthJobs.filter((j) => j.date === ds);
+  }, [currentMonthJobs, selectedDay]);
+
+  const jobTotal = (j) => {
+    const extra = (j.extraIncome || []).reduce((s, e) => s + Number(e.amount || 0), 0);
+    const exp = (j.jobExpenses || []).reduce((s, e) => s + Number(e.amount || 0), 0);
+    return Number(j.income || 0) + extra + exp;
+  };
+
   const totalJobIncome = useMemo(() => currentMonthJobs.reduce((s, j) => s + Number(j.income || 0), 0), [currentMonthJobs]);
   const monthExpCost = useMemo(() => expCalMonth.reduce((s, e) => s + Number(e.amount || 0), 0), [expCalMonth]);
   const monthExpRevenue = useMemo(() => expCalMonth.reduce((s, e) => s + Number(e.revenue || 0), 0), [expCalMonth]);
@@ -407,7 +548,7 @@ export default function App() {
 
   const repTopClients = useMemo(() => {
     const map = {};
-    reportJobs.forEach((j) => { if (j.client) map[j.client] = (map[j.client] || 0) + Number(j.income || 0); });
+    reportJobs.forEach((j) => { if (j.client) map[j.client] = (map[j.client] || 0) + jobTotal(j); });
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
   }, [reportJobs]);
 
@@ -432,6 +573,19 @@ export default function App() {
       return { label: MONTH_SHORT[m], income: inc, cost };
     });
   }, [jobs, expenses]);
+
+  const getDeadlineUrgency = (dueDateStr) => {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const due = new Date(dueDateStr); due.setHours(0,0,0,0);
+    const diff = Math.ceil((due - today) / 86400000);
+    if (diff < 0) return { label:"Scaduta", color:"#ef4444", bg:"#fee2e2", icon:"overdue", days: diff };
+    if (diff <= 30) return { label:`${diff}gg`, color:"#f59e0b", bg:"#fef3c7", icon:"urgent", days: diff };
+    return { label:`${diff}gg`, color:"#22c55e", bg:"#f0fdf4", icon:"ok", days: diff };
+  };
+
+  const sortedDeadlines = useMemo(() =>
+    [...deadlines].sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate)),
+    [deadlines]);
 
   // ── Renderers ─────────────────────────────────────────────────────────────
 
@@ -486,7 +640,7 @@ export default function App() {
       const dayJobs = currentMonthJobs.filter((j) => j.date === ds);
       const isToday = new Date().toDateString() === new Date(y, m, day).toDateString();
       days.push(
-        <TouchableOpacity key={day} onPress={() => { setSelectedDay(new Date(y, m, day)); setJobForm({ client:"",hours:"",hourlyRate:"",income:"" }); setShowClientSugg(false); setIsJobModalOpen(true); }}
+        <TouchableOpacity key={day} onPress={() => openDayDetail(new Date(y, m, day))}
           style={[styles.dayCell, isToday && styles.dayCellToday]}>
           <Text style={[styles.dayText, isToday && styles.dayTextToday]}>{day}</Text>
           <View style={styles.jobsListPreview}>
@@ -690,29 +844,66 @@ export default function App() {
 
     if (activeReport === "overview") {
       const net = repTotalIncome + repTotalRevenue - repTotalCost;
+      const totalRevenue = repTotalIncome + repTotalRevenue;
+      const marginPct = totalRevenue > 0 ? Math.round((net / totalRevenue) * 100) : 0;
+      const avgIncome = reportJobs.length > 0 ? repTotalIncome / reportJobs.length : 0;
+      const totalJobsHours = reportJobs.reduce((s, j) => s + Number(j.hours || 0), 0);
       content = (
         <>
           <PeriodFilter />
+          {/* Main KPI row */}
           <View style={styles.reportCardsRow}>
             <View style={[styles.reportCard, { backgroundColor:"#f0fdf4", borderColor:"#bbf7d0" }]}>
               <Text style={styles.reportCardLabel}>ENTRATE LAV.</Text>
               <Text style={[styles.reportCardValue, { color:"#16a34a" }]}>{fmt(repTotalIncome)}</Text>
+              <Text style={{ fontSize:10, color:"#86efac", marginTop:3 }}>{reportJobs.length} lavori · {totalJobsHours}h</Text>
             </View>
             <View style={[styles.reportCard, { backgroundColor:"#fef2f2", borderColor:"#fecaca" }]}>
-              <Text style={styles.reportCardLabel}>COSTI</Text>
+              <Text style={styles.reportCardLabel}>COSTI SPESE</Text>
               <Text style={[styles.reportCardValue, { color:"#dc2626" }]}>{fmt(repTotalCost)}</Text>
+              <Text style={{ fontSize:10, color:"#fca5a5", marginTop:3 }}>{reportExpenses.length} spese</Text>
             </View>
           </View>
           {repTotalRevenue > 0 && (
-            <View style={[styles.reportCard, { marginBottom:12, backgroundColor:"#f0fdf4", borderColor:"#bbf7d0" }]}>
-              <Text style={styles.reportCardLabel}>RICAVI DA SPESE</Text>
-              <Text style={[styles.reportCardValue, { color:"#16a34a" }]}>{fmt(repTotalRevenue)}</Text>
+            <View style={[styles.reportCard, { marginBottom:12, backgroundColor:"#f0fdf4", borderColor:"#bbf7d0", flexDirection:"row", justifyContent:"space-between", alignItems:"center" }]}>
+              <View>
+                <Text style={styles.reportCardLabel}>RICAVI DA SPESE</Text>
+                <Text style={[styles.reportCardValue, { color:"#16a34a" }]}>{fmt(repTotalRevenue)}</Text>
+              </View>
+              <Text style={{ fontSize:11, color:"#16a34a" }}>rimborsi e ricavi</Text>
             </View>
           )}
-          <View style={[styles.reportCardFull, { backgroundColor: net>=0 ? "#f0fdf4":"#fef2f2", borderColor: net>=0 ? "#bbf7d0":"#fecaca", marginBottom:16 }]}>
-            <Text style={styles.reportCardLabel}>UTILE NETTO</Text>
-            <Text style={[styles.reportCardValueLarge, { color: net>=0 ? "#16a34a":"#dc2626" }]}>{fmt(net)}</Text>
+          {/* Net profit big card */}
+          <View style={[styles.reportCardFull, { backgroundColor: net>=0 ? "#f0fdf4":"#fef2f2", borderColor: net>=0 ? "#bbf7d0":"#fecaca", marginBottom:12 }]}>
+            <View style={{ flexDirection:"row", justifyContent:"space-between", alignItems:"flex-end" }}>
+              <View>
+                <Text style={styles.reportCardLabel}>UTILE NETTO</Text>
+                <Text style={[styles.reportCardValueLarge, { color: net>=0 ? "#16a34a":"#dc2626" }]}>{fmt(net)}</Text>
+              </View>
+              <View style={{ alignItems:"flex-end" }}>
+                <Text style={{ fontSize:10, color:"#94a3b8", marginBottom:2 }}>MARGINE</Text>
+                <Text style={{ fontSize:22, fontWeight:"bold", color: net>=0 ? "#16a34a":"#dc2626" }}>{marginPct}%</Text>
+              </View>
+            </View>
+            {totalRevenue > 0 && (
+              <View style={{ marginTop:12, height:8, backgroundColor:"#e2e8f0", borderRadius:4, overflow:"hidden" }}>
+                <View style={{ height:8, width:`${Math.min(Math.max(marginPct, 0), 100)}%`, backgroundColor: net>=0 ? "#16a34a":"#dc2626", borderRadius:4 }} />
+              </View>
+            )}
           </View>
+          {/* Avg per job */}
+          {reportJobs.length > 0 && (
+            <View style={[styles.reportCardsRow, { marginBottom:16 }]}>
+              <View style={[styles.reportCard, { backgroundColor:"#f8fafc", borderColor:"#e2e8f0" }]}>
+                <Text style={styles.reportCardLabel}>MEDIA/LAVORO</Text>
+                <Text style={[styles.reportCardValue, { color:"#475569" }]}>{fmt(avgIncome)}</Text>
+              </View>
+              <View style={[styles.reportCard, { backgroundColor:"#f8fafc", borderColor:"#e2e8f0" }]}>
+                <Text style={styles.reportCardLabel}>MEDIA/ORA</Text>
+                <Text style={[styles.reportCardValue, { color:"#475569" }]}>{fmt(totalJobsHours > 0 ? repTotalIncome/totalJobsHours : 0)}</Text>
+              </View>
+            </View>
+          )}
         </>
       );
     }
@@ -721,9 +912,10 @@ export default function App() {
       const data6 = last12Months.slice(6);
       const maxV = Math.max(...data6.flatMap((d) => [d.income, d.cost]), 1);
       const bw = Math.floor((chartW - 20) / 6 - 14);
+      const maxAll = Math.max(...last12Months.flatMap((d) => [d.income, d.cost]), 1);
       content = (
         <>
-          <Text style={[styles.reportSectionTitle, { marginBottom:12 }]}>Ultimi 6 mesi</Text>
+          <Text style={[styles.reportSectionTitle, { marginBottom:12 }]}>Ultimi 6 mesi — Entrate vs Costi</Text>
           <View style={styles.reportSection}>
             <Svg width={chartW} height={200}>
               {data6.map((d, i) => {
@@ -735,6 +927,9 @@ export default function App() {
                     <Rect x={x} y={160-iH} width={bw} height={Math.max(iH,2)} fill="#22c55e" rx={3} />
                     <Rect x={x+bw+4} y={160-cH} width={bw} height={Math.max(cH,2)} fill="#ef4444" rx={3} />
                     <SvgText x={x+bw} y={180} textAnchor="middle" fontSize="9" fill="#94a3b8">{d.label}</SvgText>
+                    <SvgText x={x+bw} y={155-Math.max(iH,cH)-4} textAnchor="middle" fontSize="8" fill={d.income>=d.cost?"#22c55e":"#ef4444"}>
+                      {d.income>=d.cost?"+":"−"}
+                    </SvgText>
                   </G>
                 );
               })}
@@ -744,20 +939,42 @@ export default function App() {
               <View style={{ flexDirection:"row", alignItems:"center", gap:5 }}><View style={{ width:10, height:10, borderRadius:2, backgroundColor:"#ef4444" }} /><Text style={{ fontSize:11, color:"#64748b" }}>Costi</Text></View>
             </View>
           </View>
-          <Text style={[styles.reportSectionTitle, { marginTop:20, marginBottom:12 }]}>Ultimi 12 mesi — Entrate</Text>
+          <Text style={[styles.reportSectionTitle, { marginTop:20, marginBottom:12 }]}>Ultimi 12 mesi — Dettaglio</Text>
           <View style={styles.reportSection}>
-            {(() => {
-              const maxI = Math.max(...last12Months.map((d) => d.income), 1);
-              return last12Months.map((d, i) => (
-                <View key={i} style={{ flexDirection:"row", alignItems:"center", marginBottom:8 }}>
-                  <Text style={{ fontSize:11, color:"#64748b", width:30 }}>{d.label}</Text>
-                  <View style={{ flex:1, height:8, backgroundColor:"#f1f5f9", borderRadius:4, marginHorizontal:8, overflow:"hidden" }}>
-                    <View style={{ height:8, width:`${(d.income/maxI)*100}%`, backgroundColor:"#22c55e", borderRadius:4 }} />
+            <View style={{ flexDirection:"row", marginBottom:8 }}>
+              <Text style={{ fontSize:10, fontWeight:"bold", color:"#94a3b8", width:34 }}></Text>
+              <Text style={{ fontSize:10, fontWeight:"bold", color:"#94a3b8", flex:1, textAlign:"center" }}>ENTRATE</Text>
+              <Text style={{ fontSize:10, fontWeight:"bold", color:"#94a3b8", flex:1, textAlign:"center" }}>COSTI</Text>
+              <Text style={{ fontSize:10, fontWeight:"bold", color:"#94a3b8", width:62, textAlign:"right" }}>NETTO</Text>
+            </View>
+            {last12Months.map((d, i) => {
+              const net = d.income - d.cost;
+              const hasData = d.income > 0 || d.cost > 0;
+              return (
+                <View key={i} style={{ marginBottom:10, opacity: hasData ? 1 : 0.4 }}>
+                  <View style={{ flexDirection:"row", alignItems:"center", marginBottom:4 }}>
+                    <Text style={{ fontSize:11, color:"#64748b", width:34, fontWeight:"600" }}>{d.label}</Text>
+                    <View style={{ flex:1, marginRight:4 }}>
+                      <View style={{ height:6, backgroundColor:"#f1f5f9", borderRadius:3, overflow:"hidden" }}>
+                        <View style={{ height:6, width:`${(d.income/maxAll)*100}%`, backgroundColor:"#22c55e", borderRadius:3 }} />
+                      </View>
+                    </View>
+                    <View style={{ flex:1, marginLeft:4 }}>
+                      <View style={{ height:6, backgroundColor:"#f1f5f9", borderRadius:3, overflow:"hidden" }}>
+                        <View style={{ height:6, width:`${(d.cost/maxAll)*100}%`, backgroundColor:"#ef4444", borderRadius:3 }} />
+                      </View>
+                    </View>
+                    <Text style={{ fontSize:10, width:62, textAlign:"right", fontWeight:"bold", color: net>=0?"#16a34a":"#ef4444" }}>{fmt(net)}</Text>
                   </View>
-                  <Text style={{ fontSize:11, color:"#64748b", width:68, textAlign:"right" }}>{fmt(d.income)}</Text>
                 </View>
-              ));
-            })()}
+              );
+            })}
+            <View style={{ borderTopWidth:1, borderTopColor:"#f1f5f9", paddingTop:10, flexDirection:"row", justifyContent:"space-between" }}>
+              <Text style={{ fontSize:12, fontWeight:"bold", color:"#1e293b" }}>Totale anno</Text>
+              <Text style={{ fontSize:12, fontWeight:"bold", color: (last12Months.reduce((s,d)=>s+d.income-d.cost,0))>=0?"#16a34a":"#ef4444" }}>
+                {fmt(last12Months.reduce((s,d)=>s+d.income-d.cost,0))}
+              </Text>
+            </View>
           </View>
         </>
       );
@@ -766,7 +983,7 @@ export default function App() {
     if (activeReport === "clients") {
       if (selectedReportClient) {
         const cJobs = reportJobs.filter((j) => j.client === selectedReportClient).sort((a,b) => b.date.localeCompare(a.date));
-        const cTotal = cJobs.reduce((s,j) => s + Number(j.income||0), 0);
+        const cTotal = cJobs.reduce((s,j) => s + jobTotal(j), 0);
         const cHours = cJobs.reduce((s,j) => s + Number(j.hours||0), 0);
         content = (
           <>
@@ -778,15 +995,42 @@ export default function App() {
               <Text style={[styles.reportCardValueLarge, { color:"#b45309" }]}>{selectedReportClient}</Text>
               <Text style={{ color:"#b45309", fontSize:13, marginTop:4 }}>{fmt(cTotal)} · {cHours}h lavorate</Text>
             </View>
-            {cJobs.map((j) => (
-              <View key={j.id} style={styles.expenseItem}>
-                <View style={{ flex:1 }}>
-                  <Text style={styles.expenseDesc}>{new Date(j.date).toLocaleDateString("it-IT")}</Text>
-                  <Text style={styles.expenseDate}>{j.hours}h{j.hourlyRate ? ` · €${j.hourlyRate}/h` : ""}</Text>
+            {cJobs.map((j) => {
+              const expItems = j.jobExpenses || [];
+              const extraItems = j.extraIncome || [];
+              const hasExtras = expItems.length > 0 || extraItems.length > 0;
+              return (
+                <View key={j.id} style={[styles.expenseItem, { flexDirection:"column", alignItems:"stretch" }]}>
+                  <View style={{ flexDirection:"row", alignItems:"center" }}>
+                    <View style={{ flex:1 }}>
+                      <Text style={styles.expenseDesc}>{new Date(j.date).toLocaleDateString("it-IT", { weekday:"short", day:"2-digit", month:"short" })}</Text>
+                      <Text style={styles.expenseDate}>{j.hours}h{j.hourlyRate ? ` · €${j.hourlyRate}/h` : ""}</Text>
+                    </View>
+                    <Text style={{ fontWeight:"bold", color:"#16a34a", fontSize:15 }}>{fmt(jobTotal(j))}</Text>
+                  </View>
+                  {hasExtras && (
+                    <View style={{ marginTop:8, paddingTop:8, borderTopWidth:1, borderTopColor:"#f1f5f9" }}>
+                      <View style={{ flexDirection:"row", justifyContent:"space-between", marginBottom:4 }}>
+                        <Text style={{ fontSize:11, color:"#94a3b8" }}>🔨 Manodopera</Text>
+                        <Text style={{ fontSize:11, color:"#475569" }}>{fmt(j.income)}</Text>
+                      </View>
+                      {extraItems.map((e) => (
+                        <View key={e.id} style={{ flexDirection:"row", justifyContent:"space-between", marginBottom:4 }}>
+                          <Text style={{ fontSize:11, color:"#16a34a" }}>✅ {e.description}</Text>
+                          <Text style={{ fontSize:11, color:"#16a34a" }}>+{fmt(e.amount)}</Text>
+                        </View>
+                      ))}
+                      {expItems.map((e) => (
+                        <View key={e.id} style={{ flexDirection:"row", justifyContent:"space-between", marginBottom:4 }}>
+                          <Text style={{ fontSize:11, color:"#64748b" }}>🧾 {e.description}</Text>
+                          <Text style={{ fontSize:11, color:"#64748b" }}>{fmt(e.amount)}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
                 </View>
-                <Text style={{ fontWeight:"bold", color:"#16a34a", fontSize:15 }}>{fmt(j.income)}</Text>
-              </View>
-            ))}
+              );
+            })}
             {cJobs.length > 0 && (
               <TouchableOpacity style={[styles.submitBtn, { backgroundColor:"#b45309", flexDirection:"row", gap:8, marginTop:8 }]} onPress={() => generateClientPDF(selectedReportClient)}>
                 <FileDown color="white" size={20} /><Text style={styles.submitBtnText}>Esporta PDF</Text>
@@ -826,6 +1070,9 @@ export default function App() {
     }
 
     if (activeReport === "categories") {
+      const totalCost = repByCat.reduce((s, c) => s + c.cost, 0);
+      const totalRev = repByCat.reduce((s, c) => s + c.revenue, 0);
+      const totalNet = totalRev - totalCost;
       content = (
         <>
           <PeriodFilter />
@@ -833,29 +1080,42 @@ export default function App() {
             <View style={styles.emptyState}><Wallet color="#cbd5e1" size={40} /><Text style={styles.emptyStateText}>Nessuna spesa.</Text></View>
           ) : (
             <>
+              {/* Summary top row */}
+              <View style={[styles.reportCardsRow, { marginBottom:16 }]}>
+                <View style={[styles.reportCard, { backgroundColor:"#fef2f2", borderColor:"#fecaca" }]}>
+                  <Text style={styles.reportCardLabel}>TOTALE COSTI</Text>
+                  <Text style={[styles.reportCardValue, { color:"#dc2626" }]}>{fmt(totalCost)}</Text>
+                  <Text style={{ fontSize:10, color:"#fca5a5", marginTop:2 }}>{repByCat.length} categorie</Text>
+                </View>
+                <View style={[styles.reportCard, { backgroundColor: totalNet>=0?"#f0fdf4":"#fef2f2", borderColor: totalNet>=0?"#bbf7d0":"#fecaca" }]}>
+                  <Text style={styles.reportCardLabel}>NETTO SPESE</Text>
+                  <Text style={[styles.reportCardValue, { color: totalNet>=0?"#16a34a":"#dc2626" }]}>{fmt(totalNet)}</Text>
+                  {totalRev > 0 && <Text style={{ fontSize:10, color:"#86efac", marginTop:2 }}>+{fmt(totalRev)} ricavi</Text>}
+                </View>
+              </View>
               {repByCat.map((cat, i) => {
                 const info = getCatInfo(cat.name);
                 const maxC = repByCat[0].cost;
+                const pct = totalCost > 0 ? Math.round((cat.cost / totalCost) * 100) : 0;
                 return (
                   <View key={i} style={[styles.reportSection, { marginBottom:12 }]}>
-                    <View style={{ flexDirection:"row", alignItems:"center", marginBottom:8 }}>
-                      <Text style={{ fontSize:20, marginRight:10 }}>{info.emoji}</Text>
-                      <Text style={{ fontSize:14, fontWeight:"bold", color:"#1e293b", flex:1 }}>{cat.name}</Text>
-                      <Text style={{ color:"#ef4444", fontWeight:"bold" }}>-{fmt(cat.cost)}</Text>
-                    </View>
-                    <View style={[styles.clientBarBg, { height:6, marginBottom:8 }]}>
-                      <View style={[styles.clientBar, { width:`${(cat.cost/maxC)*100}%`, backgroundColor:info.color, height:6 }]} />
-                    </View>
-                    {cat.revenue > 0 && (
-                      <View style={{ flexDirection:"row", justifyContent:"space-between" }}>
-                        <Text style={{ color:"#64748b", fontSize:12 }}>Ricavi collegati</Text>
-                        <Text style={{ color:"#16a34a", fontWeight:"600" }}>+{fmt(cat.revenue)}</Text>
+                    <View style={{ flexDirection:"row", alignItems:"center", marginBottom:6 }}>
+                      <View style={[styles.catEmojiWrapper, { backgroundColor: info.color+"22", width:36, height:36, borderRadius:10, marginRight:10 }]}>
+                        <Text style={{ fontSize:16 }}>{info.emoji}</Text>
                       </View>
-                    )}
+                      <Text style={{ fontSize:14, fontWeight:"bold", color:"#1e293b", flex:1 }}>{cat.name}</Text>
+                      <View style={{ alignItems:"flex-end" }}>
+                        <Text style={{ color:"#ef4444", fontWeight:"bold", fontSize:14 }}>-{fmt(cat.cost)}</Text>
+                        <Text style={{ color:"#94a3b8", fontSize:10 }}>{pct}% del totale</Text>
+                      </View>
+                    </View>
+                    <View style={[styles.clientBarBg, { height:8, marginBottom:8 }]}>
+                      <View style={[styles.clientBar, { width:`${(cat.cost/maxC)*100}%`, backgroundColor:info.color, height:8 }]} />
+                    </View>
                     {cat.revenue > 0 && (
-                      <View style={{ flexDirection:"row", justifyContent:"space-between", marginTop:4 }}>
-                        <Text style={{ color:"#64748b", fontSize:12 }}>Netto categoria</Text>
-                        <Text style={{ color: cat.net>=0 ? "#16a34a":"#ef4444", fontWeight:"600" }}>{fmt(cat.net)}</Text>
+                      <View style={{ flexDirection:"row", justifyContent:"space-between", paddingTop:6, borderTopWidth:1, borderTopColor:"#f1f5f9" }}>
+                        <Text style={{ color:"#64748b", fontSize:12 }}>Ricavi · Netto</Text>
+                        <Text style={{ color: cat.net>=0?"#16a34a":"#ef4444", fontWeight:"700", fontSize:12 }}>+{fmt(cat.revenue)} · {fmt(cat.net)}</Text>
                       </View>
                     )}
                   </View>
@@ -871,35 +1131,65 @@ export default function App() {
     }
 
     if (activeReport === "balance") {
-      const filtered = last12Months.filter((d) => d.income > 0 || d.cost > 0);
+      const allMonths = last12Months.filter((d) => d.income > 0 || d.cost > 0);
+      let cumulative = 0;
+      const totalInc = allMonths.reduce((s,d)=>s+d.income,0);
+      const totalCost = allMonths.reduce((s,d)=>s+d.cost,0);
+      const totalNet = totalInc - totalCost;
       content = (
         <>
-          {filtered.length === 0 ? (
+          {allMonths.length === 0 ? (
             <View style={styles.emptyState}><Banknote color="#cbd5e1" size={40} /><Text style={styles.emptyStateText}>Nessun dato.</Text></View>
-          ) : filtered.map((d, i) => {
-            const net = d.income - d.cost;
-            return (
-              <View key={i} style={[styles.reportSection, { marginBottom:10 }]}>
-                <Text style={{ fontWeight:"bold", color:"#1e293b", marginBottom:10 }}>{d.label}</Text>
-                <View style={{ flexDirection:"row", justifyContent:"space-around" }}>
+          ) : (
+            <>
+              {/* Year summary bar */}
+              <View style={[styles.reportCardFull, { backgroundColor: totalNet>=0?"#f0fdf4":"#fef2f2", borderColor: totalNet>=0?"#bbf7d0":"#fecaca", marginBottom:16 }]}>
+                <Text style={styles.reportCardLabel}>BILANCIO PERIODO ({allMonths.length} mesi)</Text>
+                <View style={{ flexDirection:"row", justifyContent:"space-between", alignItems:"center", marginTop:6 }}>
                   <View style={{ alignItems:"center" }}>
-                    <Text style={{ fontSize:10, color:"#94a3b8", marginBottom:3 }}>ENTRATE</Text>
-                    <Text style={{ color:"#16a34a", fontWeight:"bold", fontSize:14 }}>{fmt(d.income)}</Text>
+                    <Text style={{ fontSize:10, color:"#94a3b8" }}>ENTRATE</Text>
+                    <Text style={{ fontSize:15, fontWeight:"bold", color:"#16a34a" }}>{fmt(totalInc)}</Text>
                   </View>
-                  <View style={{ width:1, backgroundColor:"#f1f5f9" }} />
+                  <Text style={{ color:"#94a3b8", fontSize:18 }}>−</Text>
                   <View style={{ alignItems:"center" }}>
-                    <Text style={{ fontSize:10, color:"#94a3b8", marginBottom:3 }}>COSTI</Text>
-                    <Text style={{ color:"#ef4444", fontWeight:"bold", fontSize:14 }}>{fmt(d.cost)}</Text>
+                    <Text style={{ fontSize:10, color:"#94a3b8" }}>COSTI</Text>
+                    <Text style={{ fontSize:15, fontWeight:"bold", color:"#ef4444" }}>{fmt(totalCost)}</Text>
                   </View>
-                  <View style={{ width:1, backgroundColor:"#f1f5f9" }} />
+                  <Text style={{ color:"#94a3b8", fontSize:18 }}>=</Text>
                   <View style={{ alignItems:"center" }}>
-                    <Text style={{ fontSize:10, color:"#94a3b8", marginBottom:3 }}>NETTO</Text>
-                    <Text style={{ color: net>=0 ? "#16a34a":"#ef4444", fontWeight:"bold", fontSize:14 }}>{fmt(net)}</Text>
+                    <Text style={{ fontSize:10, color:"#94a3b8" }}>NETTO</Text>
+                    <Text style={{ fontSize:20, fontWeight:"bold", color: totalNet>=0?"#16a34a":"#ef4444" }}>{fmt(totalNet)}</Text>
                   </View>
                 </View>
               </View>
-            );
-          })}
+              {/* Month-by-month table */}
+              <View style={styles.reportSection}>
+                <View style={{ flexDirection:"row", paddingBottom:8, borderBottomWidth:1, borderBottomColor:"#f1f5f9", marginBottom:8 }}>
+                  <Text style={{ fontSize:10, fontWeight:"bold", color:"#94a3b8", width:36 }}>MESE</Text>
+                  <Text style={{ fontSize:10, fontWeight:"bold", color:"#94a3b8", flex:1, textAlign:"right" }}>ENTR.</Text>
+                  <Text style={{ fontSize:10, fontWeight:"bold", color:"#94a3b8", flex:1, textAlign:"right" }}>COSTI</Text>
+                  <Text style={{ fontSize:10, fontWeight:"bold", color:"#94a3b8", flex:1, textAlign:"right" }}>NETTO</Text>
+                  <Text style={{ fontSize:10, fontWeight:"bold", color:"#94a3b8", flex:1, textAlign:"right" }}>CUM.</Text>
+                </View>
+                {allMonths.map((d, i) => {
+                  const net = d.income - d.cost;
+                  cumulative += net;
+                  return (
+                    <View key={i} style={{ flexDirection:"row", alignItems:"center", paddingVertical:7, borderBottomWidth:1, borderBottomColor:"#f8fafc" }}>
+                      <Text style={{ fontSize:11, fontWeight:"700", color:"#475569", width:36 }}>{d.label}</Text>
+                      <Text style={{ fontSize:11, color:"#16a34a", flex:1, textAlign:"right" }}>{fmt(d.income)}</Text>
+                      <Text style={{ fontSize:11, color:"#ef4444", flex:1, textAlign:"right" }}>{fmt(d.cost)}</Text>
+                      <View style={{ flex:1, alignItems:"flex-end", flexDirection:"row", justifyContent:"flex-end", gap:3 }}>
+                        <Text style={{ fontSize:11, fontWeight:"bold", color: net>=0?"#16a34a":"#ef4444" }}>{fmt(net)}</Text>
+                        <Text style={{ fontSize:10, color: net>=0?"#22c55e":"#ef4444" }}>{net>=0?"▲":"▼"}</Text>
+                      </View>
+                      <Text style={{ fontSize:11, color: cumulative>=0?"#16a34a":"#ef4444", flex:1, textAlign:"right" }}>{fmt(cumulative)}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </>
+          )}
         </>
       );
     }
@@ -915,6 +1205,93 @@ export default function App() {
         </View>
         <ScrollView style={{ padding:16 }} showsVerticalScrollIndicator={false}>
           {content}
+        </ScrollView>
+      </View>
+    );
+  };
+
+  const renderDeadlines = () => {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const overdue = sortedDeadlines.filter((d) => new Date(d.dueDate) < today);
+    const upcoming = sortedDeadlines.filter((d) => new Date(d.dueDate) >= today);
+    const renderItem = (dl) => {
+      const u = getDeadlineUrgency(dl.dueDate);
+      const cat = DEADLINE_CATEGORIES.find((c) => c.name === dl.category) || DEADLINE_CATEGORIES[DEADLINE_CATEGORIES.length-1];
+      const dateLabel = new Date(dl.dueDate).toLocaleDateString("it-IT", { day:"2-digit", month:"long", year:"numeric" });
+      return (
+        <View key={dl.id} style={[styles.deadlineItem, { borderLeftColor: u.color }]}>
+          <View style={[styles.deadlineEmojiBadge, { backgroundColor: cat.color+"22" }]}>
+            <Text style={{ fontSize:18 }}>{cat.emoji}</Text>
+          </View>
+          <View style={{ flex:1, marginLeft:12 }}>
+            <Text style={styles.deadlineTitle}>{dl.title}</Text>
+            <Text style={styles.deadlineMeta}>{cat.name} · {dateLabel}</Text>
+            {dl.notes ? <Text style={styles.deadlineNotes} numberOfLines={1}>{dl.notes}</Text> : null}
+            {dl.recurring !== "none" && <Text style={{ fontSize:10, color:"#8b5cf6", marginTop:2 }}>🔁 {dl.recurring === "yearly" ? "Annuale" : "Mensile"}</Text>}
+          </View>
+          <View style={{ alignItems:"flex-end", gap:6 }}>
+            <View style={[styles.deadlineUrgencyBadge, { backgroundColor: u.bg }]}>
+              {u.icon === "overdue"
+                ? <AlertTriangle color={u.color} size={12} style={{ marginRight:3 }} />
+                : u.icon === "urgent"
+                  ? <Clock color={u.color} size={12} style={{ marginRight:3 }} />
+                  : <CheckCircle2 color={u.color} size={12} style={{ marginRight:3 }} />}
+              <Text style={{ fontSize:11, fontWeight:"bold", color: u.color }}>{u.label}</Text>
+            </View>
+            <View style={{ flexDirection:"row", gap:6 }}>
+              <TouchableOpacity style={styles.dayDetailEditBtn} onPress={() => openEditDeadline(dl)}>
+                <Pencil color="#b45309" size={14} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.dayDetailDeleteBtn} onPress={() => handleDeleteDeadline(dl.id)}>
+                <Trash2 color="#ef4444" size={14} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      );
+    };
+    return (
+      <View style={styles.tabContent}>
+        <View style={[styles.header, { backgroundColor:"#4f46e5" }]}>
+          <View style={styles.headerTop}>
+            <View style={{ flexDirection:"row", alignItems:"center" }}>
+              <Bell color="white" size={22} style={{ marginRight:8 }} />
+              <Text style={styles.headerTitle}>Scadenze</Text>
+            </View>
+            <TouchableOpacity style={styles.addBtnHeader}
+              onPress={() => { setEditingDeadline(null); setDeadlineForm({ title:"", category:"Assicurazione", dueDate:new Date(), notes:"", recurring:"none" }); setIsDeadlineModalOpen(true); }}>
+              <Plus color="white" size={20} />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.statsCard}>
+            <View><Text style={styles.statsLabel}>TOTALI</Text><Text style={styles.statsValue}>{sortedDeadlines.length}</Text></View>
+            {overdue.length > 0 && <View><Text style={[styles.statsLabel, { color:"#fca5a5" }]}>SCADUTE</Text><Text style={[styles.statsValue, { color:"#fca5a5" }]}>{overdue.length}</Text></View>}
+            <View style={{ alignItems:"flex-end" }}><Text style={styles.statsLabel}>PROSSIME 30gg</Text><Text style={styles.statsValue}>{sortedDeadlines.filter(d=>getDeadlineUrgency(d.dueDate).icon==="urgent").length}</Text></View>
+          </View>
+        </View>
+        <ScrollView style={{ flex:1, padding:16 }}>
+          {sortedDeadlines.length === 0 ? (
+            <View style={[styles.emptyState, { marginTop:48 }]}>
+              <Bell color="#cbd5e1" size={48} />
+              <Text style={styles.emptyStateText}>Nessuna scadenza registrata.</Text>
+              <Text style={{ color:"#94a3b8", fontSize:12, marginTop:6, textAlign:"center" }}>Aggiungi assicurazioni, revisioni{"\n"}e altre scadenze importanti.</Text>
+            </View>
+          ) : (
+            <>
+              {overdue.length > 0 && (
+                <>
+                  <Text style={styles.deadlineSectionLabel}>⚠️ SCADUTE</Text>
+                  {overdue.map(renderItem)}
+                </>
+              )}
+              {upcoming.length > 0 && (
+                <>
+                  <Text style={styles.deadlineSectionLabel}>📅 IN ARRIVO</Text>
+                  {upcoming.map(renderItem)}
+                </>
+              )}
+            </>
+          )}
         </ScrollView>
       </View>
     );
@@ -949,6 +1326,27 @@ export default function App() {
           <LogOut color="#ef4444" size={20} style={{ marginRight:8 }} />
           <Text style={styles.logoutBtnText}>Esci dall'account</Text>
         </TouchableOpacity>
+
+        {/* Developer credits */}
+        <View style={styles.creditsCard}>
+          <View style={styles.creditsHeader}>
+            <View style={styles.creditsBadge}><Text style={{ fontSize:18 }}>⚡</Text></View>
+            <View style={{ marginLeft:12 }}>
+              <Text style={styles.creditsTitle}>Sviluppato da</Text>
+              <Text style={styles.creditsName}>Singh Probjot</Text>
+            </View>
+          </View>
+          <View style={styles.creditsDivider} />
+          <View style={{ flexDirection:"row", justifyContent:"space-between", alignItems:"center" }}>
+            <View>
+              <Text style={styles.creditsAppName}>BizTrack</Text>
+              <Text style={styles.creditsVersion}>v1.0.0 · Gestione lavori freelance</Text>
+            </View>
+            <View style={styles.creditsLogoWrap}>
+              <Image source={require("../assets/images/icon.png")} style={{ width:36, height:36, borderRadius:9 }} contentFit="contain" />
+            </View>
+          </View>
+        </View>
       </View>
     </View>
   );
@@ -973,23 +1371,77 @@ export default function App() {
         {activeTab === "calendar" && renderCalendar()}
         {activeTab === "expenses" && renderExpenses()}
         {activeTab === "reports" && renderReports()}
+        {activeTab === "deadlines" && renderDeadlines()}
         {activeTab === "profile" && renderProfile()}
       </View>
 
       {/* Bottom Navigation */}
       <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 12) }]}>
         {[
-          { id:"calendar", label:"Lavori", Icon:Calendar, activeColor:"#b45309" },
-          { id:"expenses", label:"Spese", Icon:Wallet, activeColor:"#1e293b" },
-          { id:"reports",  label:"Report", Icon:TrendingUp, activeColor:"#b45309" },
-          { id:"profile",  label:"Profilo", Icon:UserIcon, activeColor:"#b45309" },
+          { id:"calendar",  label:"Lavori",    Icon:Calendar,    activeColor:"#b45309" },
+          { id:"expenses",  label:"Spese",     Icon:Wallet,      activeColor:"#1e293b" },
+          { id:"reports",   label:"Report",    Icon:TrendingUp,  activeColor:"#b45309" },
+          { id:"deadlines", label:"Scadenze",  Icon:Bell,        activeColor:"#4f46e5" },
+          { id:"profile",   label:"Profilo",   Icon:UserIcon,    activeColor:"#b45309" },
         ].map(({ id, label, Icon, activeColor }) => (
           <TouchableOpacity key={id} style={styles.navItem} onPress={() => setActiveTab(id)}>
-            <Icon color={activeTab===id ? activeColor : "#94a3b8"} size={24} />
+            <Icon color={activeTab===id ? activeColor : "#94a3b8"} size={22} />
             <Text style={[styles.navText, activeTab===id && { color:activeColor }]}>{label}</Text>
           </TouchableOpacity>
         ))}
       </View>
+
+      {/* ── DAY DETAIL MODAL ── */}
+      <Modal visible={isDayDetailOpen} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity style={{ flex:1 }} activeOpacity={1} onPress={() => setIsDayDetailOpen(false)} />
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {selectedDay ? `${selectedDay.getDate()} ${MONTH_NAMES[selectedDay.getMonth()]}` : ""}
+              </Text>
+              <TouchableOpacity onPress={() => setIsDayDetailOpen(false)} style={styles.closeBtn}>
+                <X color="#64748b" size={20} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {selectedDayJobs.length === 0 ? (
+                <View style={styles.emptyState}>
+                  <Briefcase color="#cbd5e1" size={36} />
+                  <Text style={styles.emptyStateText}>Nessun lavoro registrato.</Text>
+                </View>
+              ) : (
+                selectedDayJobs.map((job) => (
+                  <View key={job.id} style={styles.dayDetailJobItem}>
+                    <View style={{ flex:1 }}>
+                      <Text style={styles.dayDetailJobClient}>{job.client || "Cliente non specificato"}</Text>
+                      <Text style={styles.dayDetailJobMeta}>
+                        {job.hours}h{job.hourlyRate ? ` · €${job.hourlyRate}/h` : ""}
+                        {(job.jobExpenses?.length > 0 || job.extraIncome?.length > 0)
+                          ? ` · ${(job.jobExpenses?.length||0)+(job.extraIncome?.length||0)} voci extra`
+                          : ""}
+                      </Text>
+                    </View>
+                    <Text style={styles.dayDetailJobTotal}>{fmt(jobTotal(job))}</Text>
+                    <TouchableOpacity style={styles.dayDetailEditBtn} onPress={() => { setIsDayDetailOpen(false); openEditJob(job); }}>
+                      <Pencil color="#b45309" size={15} />
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.dayDetailDeleteBtn} onPress={() => handleDeleteJob(job.id)}>
+                      <Trash2 color="#ef4444" size={15} />
+                    </TouchableOpacity>
+                  </View>
+                ))
+              )}
+              <TouchableOpacity
+                style={[styles.submitBtn, { marginTop:12, flexDirection:"row", gap:8 }]}
+                onPress={() => { setIsDayDetailOpen(false); openAddJob(); }}>
+                <Plus color="white" size={20} />
+                <Text style={styles.submitBtnText}>Aggiungi Lavoro</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       {/* ── JOB MODAL ── */}
       <Modal visible={isJobModalOpen} animationType="slide" transparent>
@@ -1043,8 +1495,71 @@ export default function App() {
               <TextInput style={styles.input} keyboardType="numeric" placeholder="150" value={jobForm.income}
                 onFocus={() => setShowClientSugg(false)}
                 onChangeText={(t) => setJobForm({...jobForm, income:t})} />
+
+              {/* ── Job Expenses ── */}
+              <Text style={styles.inputLabel}>SPESE TRASFERTA / RIMBORSI</Text>
+              {jobForm.jobExpenses.map((exp) => (
+                <View key={exp.id} style={styles.inlineItemRow}>
+                  <Text style={styles.inlineItemDesc} numberOfLines={1}>{exp.description}</Text>
+                  <Text style={styles.inlineItemAmt}>{fmt(exp.amount)}</Text>
+                  <TouchableOpacity onPress={() => setJobForm({...jobForm, jobExpenses: jobForm.jobExpenses.filter((e) => e.id !== exp.id)})}>
+                    <X color="#ef4444" size={16} />
+                  </TouchableOpacity>
+                </View>
+              ))}
+              <View style={styles.inlineAddRow}>
+                <TextInput
+                  style={[styles.input, { flex:1, fontSize:13, paddingVertical:10, paddingHorizontal:12 }]}
+                  placeholder="Es. Autostrada, parcheggio..."
+                  value={newJobExpense.description}
+                  onChangeText={(t) => setNewJobExpense({...newJobExpense, description:t})} />
+                <TextInput
+                  style={[styles.input, { width:72, fontSize:13, paddingVertical:10, paddingHorizontal:12, marginLeft:8 }]}
+                  keyboardType="numeric" placeholder="€"
+                  value={newJobExpense.amount}
+                  onChangeText={(t) => setNewJobExpense({...newJobExpense, amount:t})} />
+                <TouchableOpacity style={styles.inlineAddBtn} onPress={() => {
+                  if (!newJobExpense.description.trim() || !newJobExpense.amount) return;
+                  setJobForm({...jobForm, jobExpenses: [...jobForm.jobExpenses, { id:newId(), ...newJobExpense }]});
+                  setNewJobExpense({ description:"", amount:"" });
+                }}>
+                  <Plus color="white" size={18} />
+                </TouchableOpacity>
+              </View>
+
+              {/* ── Extra Income ── */}
+              <Text style={styles.inputLabel}>GUADAGNI EXTRA (a carico cliente)</Text>
+              {jobForm.extraIncome.map((ei) => (
+                <View key={ei.id} style={[styles.inlineItemRow, { backgroundColor:"#f0fdf4", borderColor:"#bbf7d0" }]}>
+                  <Text style={styles.inlineItemDesc} numberOfLines={1}>{ei.description}</Text>
+                  <Text style={[styles.inlineItemAmt, { color:"#16a34a" }]}>+{fmt(ei.amount)}</Text>
+                  <TouchableOpacity onPress={() => setJobForm({...jobForm, extraIncome: jobForm.extraIncome.filter((e) => e.id !== ei.id)})}>
+                    <X color="#ef4444" size={16} />
+                  </TouchableOpacity>
+                </View>
+              ))}
+              <View style={styles.inlineAddRow}>
+                <TextInput
+                  style={[styles.input, { flex:1, fontSize:13, paddingVertical:10, paddingHorizontal:12, borderColor:"#bbf7d0" }]}
+                  placeholder="Es. Pasto, trasferta cliente..."
+                  value={newExtraIncome.description}
+                  onChangeText={(t) => setNewExtraIncome({...newExtraIncome, description:t})} />
+                <TextInput
+                  style={[styles.input, { width:72, fontSize:13, paddingVertical:10, paddingHorizontal:12, marginLeft:8, borderColor:"#bbf7d0" }]}
+                  keyboardType="numeric" placeholder="€"
+                  value={newExtraIncome.amount}
+                  onChangeText={(t) => setNewExtraIncome({...newExtraIncome, amount:t})} />
+                <TouchableOpacity style={[styles.inlineAddBtn, { backgroundColor:"#16a34a" }]} onPress={() => {
+                  if (!newExtraIncome.description.trim() || !newExtraIncome.amount) return;
+                  setJobForm({...jobForm, extraIncome: [...jobForm.extraIncome, { id:newId(), ...newExtraIncome }]});
+                  setNewExtraIncome({ description:"", amount:"" });
+                }}>
+                  <Plus color="white" size={18} />
+                </TouchableOpacity>
+              </View>
+
               <TouchableOpacity style={styles.submitBtn} onPress={handleSaveJob}>
-                <Text style={styles.submitBtnText}>Salva Lavoro</Text>
+                <Text style={styles.submitBtnText}>{editingJob ? "Aggiorna Lavoro" : "Salva Lavoro"}</Text>
               </TouchableOpacity>
             </ScrollView>
           </View>
@@ -1118,6 +1633,74 @@ export default function App() {
 
               <TouchableOpacity style={[styles.submitBtn, { backgroundColor:"#1e293b" }]} onPress={handleSaveExpense}>
                 <Text style={styles.submitBtnText}>Registra</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* ── DEADLINE MODAL ── */}
+      <Modal visible={isDeadlineModalOpen} animationType="slide" transparent>
+        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS==="ios" ? "padding" : "height"}>
+          <TouchableOpacity style={{ flex:1 }} activeOpacity={1} onPress={() => setIsDeadlineModalOpen(false)} />
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{editingDeadline ? "Modifica Scadenza" : "Nuova Scadenza"}</Text>
+              <TouchableOpacity onPress={() => setIsDeadlineModalOpen(false)} style={styles.closeBtn}><X color="#64748b" size={20} /></TouchableOpacity>
+            </View>
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <Text style={styles.inputLabel}>TITOLO</Text>
+              <TextInput style={styles.input} placeholder="Es. Assicurazione furgone..."
+                value={deadlineForm.title} onChangeText={(t) => setDeadlineForm({...deadlineForm, title:t})} />
+
+              <Text style={styles.inputLabel}>CATEGORIA</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom:4 }}>
+                <View style={{ flexDirection:"row", gap:8, paddingVertical:4 }}>
+                  {DEADLINE_CATEGORIES.map((cat) => (
+                    <TouchableOpacity key={cat.id}
+                      style={[styles.catChip, deadlineForm.category===cat.name && { backgroundColor:cat.color, borderColor:cat.color }]}
+                      onPress={() => setDeadlineForm({...deadlineForm, category:cat.name})}>
+                      <Text style={{ fontSize:16 }}>{cat.emoji}</Text>
+                      <Text style={[styles.catChipText, deadlineForm.category===cat.name && { color:"white" }]}>{cat.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
+
+              <Text style={styles.inputLabel}>DATA SCADENZA</Text>
+              <View style={styles.datePicker}>
+                <TouchableOpacity onPress={() => { const d = new Date(deadlineForm.dueDate); d.setDate(d.getDate()-1); setDeadlineForm({...deadlineForm, dueDate:d}); }}>
+                  <ChevronLeft color="#475569" size={22} />
+                </TouchableOpacity>
+                <Text style={styles.datePickerText}>
+                  {(deadlineForm.dueDate instanceof Date ? deadlineForm.dueDate : new Date(deadlineForm.dueDate)).toLocaleDateString("it-IT", { day:"2-digit", month:"long", year:"numeric" })}
+                </Text>
+                <TouchableOpacity onPress={() => { const d = new Date(deadlineForm.dueDate); d.setDate(d.getDate()+1); setDeadlineForm({...deadlineForm, dueDate:d}); }}>
+                  <ChevronRight color="#475569" size={22} />
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.inputLabel}>RICORRENZA</Text>
+              <View style={{ flexDirection:"row", gap:8, marginBottom:8 }}>
+                {[{k:"none",l:"Una volta"},{k:"yearly",l:"🔁 Annuale"},{k:"monthly",l:"🔁 Mensile"}].map(({k,l}) => (
+                  <TouchableOpacity key={k}
+                    style={[styles.catChip, deadlineForm.recurring===k && { backgroundColor:"#4f46e5", borderColor:"#4f46e5" }]}
+                    onPress={() => setDeadlineForm({...deadlineForm, recurring:k})}>
+                    <Text style={[styles.catChipText, deadlineForm.recurring===k && { color:"white" }]}>{l}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={styles.inputLabel}>NOTE (opzionale)</Text>
+              <TextInput style={[styles.input, { minHeight:72, textAlignVertical:"top" }]}
+                placeholder="Es. Polizza n° 12345, contatto: ..."
+                multiline value={deadlineForm.notes}
+                onChangeText={(t) => setDeadlineForm({...deadlineForm, notes:t})} />
+
+              <TouchableOpacity
+                style={[styles.submitBtn, { backgroundColor: deadlineForm.title.trim() ? "#4f46e5":"#94a3b8" }]}
+                onPress={handleSaveDeadline} disabled={!deadlineForm.title.trim()}>
+                <Text style={styles.submitBtnText}>{editingDeadline ? "Aggiorna" : "Salva Scadenza"}</Text>
               </TouchableOpacity>
             </ScrollView>
           </View>
@@ -1332,4 +1915,39 @@ const styles = StyleSheet.create({
   periodChipActive: { backgroundColor:"white" },
   periodChipText: { color:"rgba(255,255,255,0.8)", fontSize:11, fontWeight:"bold" },
   periodChipTextActive: { color:"#0f172a" },
+
+  // Deadlines tab
+  deadlineSectionLabel: { fontSize:11, fontWeight:"bold", color:"#94a3b8", marginBottom:8, marginTop:4, letterSpacing:0.5 },
+  deadlineItem: { flexDirection:"row", alignItems:"center", backgroundColor:"white", borderRadius:14, padding:14, marginBottom:10, borderLeftWidth:4, shadowColor:"#000", shadowOpacity:0.04, shadowRadius:8, elevation:2 },
+  deadlineEmojiBadge: { width:42, height:42, borderRadius:12, justifyContent:"center", alignItems:"center" },
+  deadlineTitle: { fontSize:14, fontWeight:"bold", color:"#1e293b" },
+  deadlineMeta: { fontSize:12, color:"#94a3b8", marginTop:2 },
+  deadlineNotes: { fontSize:11, color:"#64748b", marginTop:3, fontStyle:"italic" },
+  deadlineUrgencyBadge: { flexDirection:"row", alignItems:"center", paddingHorizontal:8, paddingVertical:4, borderRadius:20 },
+
+  // Credits card
+  creditsCard: { marginTop:28, width:"100%", backgroundColor:"white", borderRadius:20, padding:20, shadowColor:"#000", shadowOpacity:0.06, shadowRadius:12, elevation:3, borderWidth:1, borderColor:"#f1f5f9" },
+  creditsHeader: { flexDirection:"row", alignItems:"center", marginBottom:16 },
+  creditsBadge: { width:48, height:48, borderRadius:14, backgroundColor:"#fef3c7", justifyContent:"center", alignItems:"center" },
+  creditsTitle: { fontSize:11, color:"#94a3b8", fontWeight:"bold", textTransform:"uppercase", letterSpacing:0.5 },
+  creditsName: { fontSize:18, fontWeight:"bold", color:"#1e293b", marginTop:2 },
+  creditsDivider: { height:1, backgroundColor:"#f1f5f9", marginBottom:14 },
+  creditsAppName: { fontSize:16, fontWeight:"bold", color:"#b45309" },
+  creditsVersion: { fontSize:11, color:"#94a3b8", marginTop:2 },
+  creditsLogoWrap: { backgroundColor:"#fef3c7", borderRadius:12, padding:4 },
+
+  // Day detail modal
+  dayDetailJobItem: { flexDirection:"row", alignItems:"center", backgroundColor:"#f8fafc", borderRadius:12, padding:12, marginBottom:8, borderWidth:1, borderColor:"#e2e8f0" },
+  dayDetailJobClient: { fontSize:14, fontWeight:"bold", color:"#1e293b" },
+  dayDetailJobMeta: { fontSize:12, color:"#94a3b8", marginTop:2 },
+  dayDetailJobTotal: { fontSize:14, fontWeight:"bold", color:"#16a34a", marginRight:8 },
+  dayDetailEditBtn: { backgroundColor:"#fef3c7", width:32, height:32, borderRadius:8, justifyContent:"center", alignItems:"center", marginRight:6 },
+  dayDetailDeleteBtn: { backgroundColor:"#fee2e2", width:32, height:32, borderRadius:8, justifyContent:"center", alignItems:"center" },
+
+  // Inline add rows (job expenses / extra income in job modal)
+  inlineItemRow: { flexDirection:"row", alignItems:"center", backgroundColor:"#f8fafc", borderRadius:8, paddingHorizontal:10, paddingVertical:8, marginBottom:6, borderWidth:1, borderColor:"#e2e8f0" },
+  inlineItemDesc: { flex:1, fontSize:13, color:"#334155" },
+  inlineItemAmt: { fontSize:13, fontWeight:"bold", color:"#475569", marginRight:8 },
+  inlineAddRow: { flexDirection:"row", alignItems:"center", marginTop:4, marginBottom:4 },
+  inlineAddBtn: { backgroundColor:"#b45309", width:42, height:42, borderRadius:10, justifyContent:"center", alignItems:"center", marginLeft:8 },
 });

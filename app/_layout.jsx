@@ -9,6 +9,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Download,
   FileDown,
   Lock,
   LogOut,
@@ -20,11 +21,14 @@ import {
   User as UserIcon,
   Users,
   Wallet,
+  WifiOff,
   X,
 } from "lucide-react-native";
+import NetInfo from "@react-native-community/netinfo";
 import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -42,6 +46,7 @@ import Svg, { G, Rect, Text as SvgText } from "react-native-svg";
 
 import ReactNativeAsyncStorage from "@react-native-async-storage/async-storage";
 import { Image } from "expo-image";
+import * as FileSystem from "expo-file-system";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import { initializeApp } from "firebase/app";
@@ -198,6 +203,12 @@ export default function App() {
   // Reports
   const [reportPeriod, setReportPeriod] = useState("month");
 
+  // Network & UX
+  const [isOnline, setIsOnline] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [jobFormError, setJobFormError] = useState("");
+  const [expenseFormError, setExpenseFormError] = useState("");
+
   // ── Helpers ──────────────────────────────────────────────────────────────
 
   const fmt = (n) => `€ ${Number(n || 0).toFixed(2)}`;
@@ -220,6 +231,13 @@ export default function App() {
 
   React.useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => { setUser(u); setIsAuthLoading(false); });
+    return unsub;
+  }, []);
+
+  React.useEffect(() => {
+    const unsub = NetInfo.addEventListener((state) => {
+      setIsOnline(!!(state.isConnected && state.isInternetReachable !== false));
+    });
     return unsub;
   }, []);
 
@@ -267,7 +285,11 @@ export default function App() {
     } finally { setIsProcessingAuth(false); }
   };
 
-  const handleLogout = async () => { try { await signOut(auth); } catch {} };
+  const handleLogout = () =>
+    Alert.alert("Esci dall'account", "Sei sicuro di voler uscire?", [
+      { text: "Annulla", style: "cancel" },
+      { text: "Esci", style: "destructive", onPress: async () => { try { await signOut(auth); } catch {} } },
+    ]);
 
   // ── CRUD ──────────────────────────────────────────────────────────────────
 
@@ -307,11 +329,14 @@ export default function App() {
 
   const handleSaveJob = async () => {
     if (!user || !selectedDay) return;
+    if (!jobForm.client.trim()) { setJobFormError("Inserisci il nome del cliente."); return; }
+    setJobFormError("");
+    setIsSaving(true);
     const jobId = editingJob ? editingJob.id : newId();
     try {
       await setDoc(docRef("jobs", jobId), {
         date: fmtDateStr(selectedDay),
-        client: jobForm.client,
+        client: jobForm.client.trim(),
         hours: Number(jobForm.hours?.replace(",", ".") || 0),
         hourlyRate: jobForm.hourlyRate ? Number(jobForm.hourlyRate.replace(",", ".")) : null,
         income: Number(jobForm.income?.replace(",", ".") || 0),
@@ -323,14 +348,19 @@ export default function App() {
       setIsJobModalOpen(false);
       setEditingJob(null);
     } catch (e) { console.error(e); }
+    finally { setIsSaving(false); }
   };
 
   const handleSaveExpense = async () => {
     if (!user) return;
+    if (!expenseForm.description.trim()) { setExpenseFormError("Inserisci una descrizione."); return; }
+    if (!expenseForm.amount || Number(expenseForm.amount) <= 0) { setExpenseFormError("Inserisci un importo valido."); return; }
+    setExpenseFormError("");
+    setIsSaving(true);
     try {
       await setDoc(docRef("expenses", newId()), {
         date: fmtDateStr(expenseForm.date),
-        description: expenseForm.description,
+        description: expenseForm.description.trim(),
         amount: Number(expenseForm.amount || 0),
         revenue: Number(expenseForm.revenue || 0),
         category: expenseForm.category,
@@ -339,6 +369,7 @@ export default function App() {
       setIsExpenseModalOpen(false);
       setExpenseForm({ description: "", amount: "", revenue: "", category: "Carburante", date: new Date() });
     } catch (e) { console.error(e); }
+    finally { setIsSaving(false); }
   };
 
   const handleAddCategory = async () => {
@@ -355,11 +386,27 @@ export default function App() {
     } catch (e) { console.error(e); }
   };
 
-  const handleDeleteJob = async (id) => { try { await deleteDoc(docRef("jobs", id)); } catch (e) { console.error(e); } };
-  const handleDeleteExpense = async (id) => { try { await deleteDoc(docRef("expenses", id)); } catch (e) { console.error(e); } };
+  const confirmDeleteJob = (id) =>
+    Alert.alert("Elimina lavoro", "Vuoi eliminare questo lavoro?", [
+      { text: "Annulla", style: "cancel" },
+      { text: "Elimina", style: "destructive", onPress: async () => { try { await deleteDoc(docRef("jobs", id)); } catch (e) { console.error(e); } } },
+    ]);
+
+  const confirmDeleteExpense = (id) =>
+    Alert.alert("Elimina spesa", "Vuoi eliminare questa spesa?", [
+      { text: "Annulla", style: "cancel" },
+      { text: "Elimina", style: "destructive", onPress: async () => { try { await deleteDoc(docRef("expenses", id)); } catch (e) { console.error(e); } } },
+    ]);
+
+  const confirmDeleteDeadline = (id) =>
+    Alert.alert("Elimina scadenza", "Vuoi eliminare questa scadenza?", [
+      { text: "Annulla", style: "cancel" },
+      { text: "Elimina", style: "destructive", onPress: async () => { try { await deleteDoc(docRef("deadlines", id)); } catch (e) { console.error(e); } } },
+    ]);
 
   const handleSaveDeadline = async () => {
     if (!user || !deadlineForm.title.trim()) return;
+    setIsSaving(true);
     const dlId = editingDeadline ? editingDeadline.id : newId();
     try {
       await setDoc(docRef("deadlines", dlId), {
@@ -375,6 +422,7 @@ export default function App() {
       setEditingDeadline(null);
       setDeadlineForm({ title:"", category:"Assicurazione", dueDate:new Date(), notes:"", recurring:"none" });
     } catch (e) { console.error(e); }
+    finally { setIsSaving(false); }
   };
 
   const openEditDeadline = (dl) => {
@@ -389,7 +437,23 @@ export default function App() {
     setIsDeadlineModalOpen(true);
   };
 
-  const handleDeleteDeadline = async (id) => { try { await deleteDoc(docRef("deadlines", id)); } catch (e) { console.error(e); } };
+  const handleDeleteDeadline = (id) => confirmDeleteDeadline(id);
+
+  const handleExportData = async () => {
+    try {
+      const payload = {
+        exportDate: new Date().toISOString(),
+        user: user?.isAnonymous ? "Ospite" : user?.email,
+        jobs,
+        expenses,
+        deadlines,
+      };
+      const json = JSON.stringify(payload, null, 2);
+      const uri = FileSystem.documentDirectory + "biztrack-export.json";
+      await FileSystem.writeAsStringAsync(uri, json, { encoding: FileSystem.EncodingType.UTF8 });
+      await Sharing.shareAsync(uri, { mimeType: "application/json", dialogTitle: "Esporta dati BizTrack" });
+    } catch (e) { console.error(e); }
+  };
 
   // ── PDF ───────────────────────────────────────────────────────────────────
 
@@ -515,13 +579,22 @@ export default function App() {
     return currentMonthJobs.filter((j) => j.date === ds);
   }, [currentMonthJobs, selectedDay]);
 
-  const jobTotal = (j) => {
+  // What the freelancer actually earns: base pay + extra income items charged to client
+  const jobProfit = (j) => {
     const extra = (j.extraIncome || []).reduce((s, e) => s + Number(e.amount || 0), 0);
-    const exp = (j.jobExpenses || []).reduce((s, e) => s + Number(e.amount || 0), 0);
-    return Number(j.income || 0) + extra + exp;
+    return Number(j.income || 0) + extra;
   };
 
-  const totalJobIncome = useMemo(() => currentMonthJobs.reduce((s, j) => s + Number(j.income || 0), 0), [currentMonthJobs]);
+  // What's invoiced to the client: profit + reimbursed expenses (pass-through, net = 0 for freelancer)
+  const jobBilled = (j) => {
+    const exp = (j.jobExpenses || []).reduce((s, e) => s + Number(e.amount || 0), 0);
+    return jobProfit(j) + exp;
+  };
+
+  // Alias kept for PDF/billing usage (always the billed total)
+  const jobTotal = jobBilled;
+
+  const totalJobIncome = useMemo(() => currentMonthJobs.reduce((s, j) => s + jobProfit(j), 0), [currentMonthJobs]);
   const monthExpCost = useMemo(() => expCalMonth.reduce((s, e) => s + Number(e.amount || 0), 0), [expCalMonth]);
   const monthExpRevenue = useMemo(() => expCalMonth.reduce((s, e) => s + Number(e.revenue || 0), 0), [expCalMonth]);
 
@@ -542,13 +615,13 @@ export default function App() {
 
   const reportJobs = useMemo(() => jobs.filter((j) => new Date(j.date) >= reportStartDate), [jobs, reportStartDate]);
   const reportExpenses = useMemo(() => expenses.filter((e) => new Date(e.date) >= reportStartDate), [expenses, reportStartDate]);
-  const repTotalIncome = useMemo(() => reportJobs.reduce((s, j) => s + Number(j.income || 0), 0), [reportJobs]);
+  const repTotalIncome = useMemo(() => reportJobs.reduce((s, j) => s + jobProfit(j), 0), [reportJobs]);
   const repTotalCost = useMemo(() => reportExpenses.reduce((s, e) => s + Number(e.amount || 0), 0), [reportExpenses]);
   const repTotalRevenue = useMemo(() => reportExpenses.reduce((s, e) => s + Number(e.revenue || 0), 0), [reportExpenses]);
 
   const repTopClients = useMemo(() => {
     const map = {};
-    reportJobs.forEach((j) => { if (j.client) map[j.client] = (map[j.client] || 0) + jobTotal(j); });
+    reportJobs.forEach((j) => { if (j.client) map[j.client] = (map[j.client] || 0) + jobBilled(j); });
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
   }, [reportJobs]);
 
@@ -568,8 +641,10 @@ export default function App() {
     return Array.from({ length: 12 }, (_, i) => {
       const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (11 - i));
       const m = d.getMonth(), y = d.getFullYear();
-      const inc = jobs.filter((j) => { const jd = new Date(j.date); return jd.getMonth() === m && jd.getFullYear() === y; }).reduce((s, j) => s + Number(j.income || 0), 0);
-      const cost = expenses.filter((e) => { const ed = new Date(e.date); return ed.getMonth() === m && ed.getFullYear() === y; }).reduce((s, e) => s + Number(e.amount || 0), 0);
+      const mJobs = jobs.filter((j) => { const jd = new Date(j.date); return jd.getMonth() === m && jd.getFullYear() === y; });
+      const mExps = expenses.filter((e) => { const ed = new Date(e.date); return ed.getMonth() === m && ed.getFullYear() === y; });
+      const inc = mJobs.reduce((s, j) => s + jobProfit(j), 0) + mExps.reduce((s, e) => s + Number(e.revenue || 0), 0);
+      const cost = mExps.reduce((s, e) => s + Number(e.amount || 0), 0);
       return { label: MONTH_SHORT[m], income: inc, cost };
     });
   }, [jobs, expenses]);
@@ -644,7 +719,7 @@ export default function App() {
           style={[styles.dayCell, isToday && styles.dayCellToday]}>
           <Text style={[styles.dayText, isToday && styles.dayTextToday]}>{day}</Text>
           <View style={styles.jobsListPreview}>
-            {dayJobs.map((j) => <View key={j.id} style={styles.jobBadge}><Text style={styles.jobBadgeText} numberOfLines={1}>{j.client}</Text></View>)}
+            {dayJobs.map((j) => <View key={j.id} style={Number(j.income || 0) === 0 ? styles.appointmentBadge : styles.jobBadge}><Text style={styles.jobBadgeText} numberOfLines={1}>{j.client}</Text></View>)}
           </View>
         </TouchableOpacity>
       );
@@ -777,7 +852,7 @@ export default function App() {
                       <Text style={styles.expenseAmount}>-{fmt(exp.amount)}</Text>
                       {hasRev && <Text style={{ fontSize:12, color:"#16a34a", fontWeight:"bold" }}>+{fmt(exp.revenue)}</Text>}
                       {hasRev && <Text style={{ fontSize:11, color: net>=0 ? "#16a34a" : "#ef4444" }}>netto {fmt(net)}</Text>}
-                      <TouchableOpacity onPress={() => handleDeleteExpense(exp.id)}>
+                      <TouchableOpacity onPress={() => confirmDeleteExpense(exp.id)}>
                         <Text style={styles.deleteText}>Elimina</Text>
                       </TouchableOpacity>
                     </View>
@@ -983,22 +1058,42 @@ export default function App() {
     if (activeReport === "clients") {
       if (selectedReportClient) {
         const cJobs = reportJobs.filter((j) => j.client === selectedReportClient).sort((a,b) => b.date.localeCompare(a.date));
-        const cTotal = cJobs.reduce((s,j) => s + jobTotal(j), 0);
+        const cProfit = cJobs.reduce((s,j) => s + jobProfit(j), 0);
+        const cBilled = cJobs.reduce((s,j) => s + jobBilled(j), 0);
+        const cReimbursed = cBilled - cProfit;
         const cHours = cJobs.reduce((s,j) => s + Number(j.hours||0), 0);
         content = (
           <>
             <TouchableOpacity style={{ flexDirection:"row", alignItems:"center", marginBottom:16 }} onPress={() => setSelectedReportClient(null)}>
               <ArrowLeft color="#64748b" size={16} /><Text style={{ color:"#64748b", marginLeft:4, fontSize:13 }}>Tutti i clienti</Text>
             </TouchableOpacity>
-            <View style={[styles.reportCardFull, { backgroundColor:"#fef3c7", borderColor:"#fcd34d", marginBottom:16 }]}>
-              <Text style={styles.reportCardLabel}>CLIENTE</Text>
+            {/* Client summary card */}
+            <View style={[styles.reportCardFull, { backgroundColor:"#fef3c7", borderColor:"#fcd34d", marginBottom:12 }]}>
+              <Text style={styles.reportCardLabel}>CLIENTE · {cJobs.length} giornate · {cHours}h</Text>
               <Text style={[styles.reportCardValueLarge, { color:"#b45309" }]}>{selectedReportClient}</Text>
-              <Text style={{ color:"#b45309", fontSize:13, marginTop:4 }}>{fmt(cTotal)} · {cHours}h lavorate</Text>
+              <View style={{ flexDirection:"row", justifyContent:"space-between", marginTop:10 }}>
+                <View style={{ alignItems:"center" }}>
+                  <Text style={{ fontSize:10, color:"#92400e" }}>TUO UTILE NETTO</Text>
+                  <Text style={{ fontSize:16, fontWeight:"bold", color:"#16a34a", marginTop:2 }}>{fmt(cProfit)}</Text>
+                </View>
+                {cReimbursed > 0 && (
+                  <View style={{ alignItems:"center" }}>
+                    <Text style={{ fontSize:10, color:"#92400e" }}>SPESE RIMBORSATE</Text>
+                    <Text style={{ fontSize:16, fontWeight:"bold", color:"#64748b", marginTop:2 }}>{fmt(cReimbursed)}</Text>
+                  </View>
+                )}
+                <View style={{ alignItems:"center" }}>
+                  <Text style={{ fontSize:10, color:"#92400e" }}>TOTALE FATTURATO</Text>
+                  <Text style={{ fontSize:16, fontWeight:"bold", color:"#b45309", marginTop:2 }}>{fmt(cBilled)}</Text>
+                </View>
+              </View>
             </View>
             {cJobs.map((j) => {
               const expItems = j.jobExpenses || [];
               const extraItems = j.extraIncome || [];
               const hasExtras = expItems.length > 0 || extraItems.length > 0;
+              const jProfit = jobProfit(j);
+              const jBilled = jobBilled(j);
               return (
                 <View key={j.id} style={[styles.expenseItem, { flexDirection:"column", alignItems:"stretch" }]}>
                   <View style={{ flexDirection:"row", alignItems:"center" }}>
@@ -1006,26 +1101,33 @@ export default function App() {
                       <Text style={styles.expenseDesc}>{new Date(j.date).toLocaleDateString("it-IT", { weekday:"short", day:"2-digit", month:"short" })}</Text>
                       <Text style={styles.expenseDate}>{j.hours}h{j.hourlyRate ? ` · €${j.hourlyRate}/h` : ""}</Text>
                     </View>
-                    <Text style={{ fontWeight:"bold", color:"#16a34a", fontSize:15 }}>{fmt(jobTotal(j))}</Text>
+                    <View style={{ alignItems:"flex-end" }}>
+                      <Text style={{ fontWeight:"bold", color:"#16a34a", fontSize:14 }}>{fmt(jProfit)}</Text>
+                      {expItems.length > 0 && <Text style={{ fontSize:10, color:"#94a3b8" }}>fatturato {fmt(jBilled)}</Text>}
+                    </View>
                   </View>
                   {hasExtras && (
                     <View style={{ marginTop:8, paddingTop:8, borderTopWidth:1, borderTopColor:"#f1f5f9" }}>
                       <View style={{ flexDirection:"row", justifyContent:"space-between", marginBottom:4 }}>
                         <Text style={{ fontSize:11, color:"#94a3b8" }}>🔨 Manodopera</Text>
-                        <Text style={{ fontSize:11, color:"#475569" }}>{fmt(j.income)}</Text>
+                        <Text style={{ fontSize:11, color:"#16a34a", fontWeight:"600" }}>{fmt(j.income)}</Text>
                       </View>
                       {extraItems.map((e) => (
                         <View key={e.id} style={{ flexDirection:"row", justifyContent:"space-between", marginBottom:4 }}>
                           <Text style={{ fontSize:11, color:"#16a34a" }}>✅ {e.description}</Text>
-                          <Text style={{ fontSize:11, color:"#16a34a" }}>+{fmt(e.amount)}</Text>
+                          <Text style={{ fontSize:11, color:"#16a34a", fontWeight:"600" }}>+{fmt(e.amount)}</Text>
                         </View>
                       ))}
-                      {expItems.map((e) => (
-                        <View key={e.id} style={{ flexDirection:"row", justifyContent:"space-between", marginBottom:4 }}>
-                          <Text style={{ fontSize:11, color:"#64748b" }}>🧾 {e.description}</Text>
-                          <Text style={{ fontSize:11, color:"#64748b" }}>{fmt(e.amount)}</Text>
+                      {expItems.length > 0 && (
+                        <View style={{ borderTopWidth:1, borderTopColor:"#fef3c7", marginTop:4, paddingTop:4 }}>
+                          {expItems.map((e) => (
+                            <View key={e.id} style={{ flexDirection:"row", justifyContent:"space-between", marginBottom:4 }}>
+                              <Text style={{ fontSize:11, color:"#94a3b8" }}>🧾 {e.description} (rimborso)</Text>
+                              <Text style={{ fontSize:11, color:"#94a3b8" }}>{fmt(e.amount)}</Text>
+                            </View>
+                          ))}
                         </View>
-                      ))}
+                      )}
                     </View>
                   )}
                 </View>
@@ -1322,6 +1424,11 @@ export default function App() {
             ))
           }
         </View>
+        <TouchableOpacity style={styles.exportBtn} onPress={handleExportData}>
+          <Download color="#4f46e5" size={20} style={{ marginRight:8 }} />
+          <Text style={styles.exportBtnText}>Esporta tutti i dati (JSON)</Text>
+        </TouchableOpacity>
+
         <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
           <LogOut color="#ef4444" size={20} style={{ marginRight:8 }} />
           <Text style={styles.logoutBtnText}>Esci dall'account</Text>
@@ -1340,7 +1447,7 @@ export default function App() {
           <View style={{ flexDirection:"row", justifyContent:"space-between", alignItems:"center" }}>
             <View>
               <Text style={styles.creditsAppName}>BizTrack</Text>
-              <Text style={styles.creditsVersion}>v1.0.0 · Gestione lavori freelance</Text>
+              <Text style={styles.creditsVersion}>v1.2.0 · Gestione lavori freelance</Text>
             </View>
             <View style={styles.creditsLogoWrap}>
               <Image source={require("../assets/images/icon.png")} style={{ width:36, height:36, borderRadius:9 }} contentFit="contain" />
@@ -1367,6 +1474,12 @@ export default function App() {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
+      {!isOnline && (
+        <View style={styles.offlineBanner}>
+          <WifiOff color="white" size={13} />
+          <Text style={styles.offlineBannerText}>Offline — le modifiche verranno sincronizzate appena torni online</Text>
+        </View>
+      )}
       <View style={{ flex:1 }}>
         {activeTab === "calendar" && renderCalendar()}
         {activeTab === "expenses" && renderExpenses()}
@@ -1426,7 +1539,7 @@ export default function App() {
                     <TouchableOpacity style={styles.dayDetailEditBtn} onPress={() => { setIsDayDetailOpen(false); openEditJob(job); }}>
                       <Pencil color="#b45309" size={15} />
                     </TouchableOpacity>
-                    <TouchableOpacity style={styles.dayDetailDeleteBtn} onPress={() => handleDeleteJob(job.id)}>
+                    <TouchableOpacity style={styles.dayDetailDeleteBtn} onPress={() => confirmDeleteJob(job.id)}>
                       <Trash2 color="#ef4444" size={15} />
                     </TouchableOpacity>
                   </View>
@@ -1449,10 +1562,11 @@ export default function App() {
           <TouchableOpacity style={{ flex:1 }} activeOpacity={1} onPress={() => setShowClientSugg(false)} />
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Lavoro del {selectedDay?.getDate()}</Text>
-              <TouchableOpacity onPress={() => setIsJobModalOpen(false)} style={styles.closeBtn}><X color="#64748b" size={20} /></TouchableOpacity>
+              <Text style={styles.modalTitle}>{editingJob ? "Modifica Lavoro" : `Lavoro del ${selectedDay?.getDate()}`}</Text>
+              <TouchableOpacity onPress={() => { setIsJobModalOpen(false); setJobFormError(""); }} style={styles.closeBtn}><X color="#64748b" size={20} /></TouchableOpacity>
             </View>
             <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              {jobFormError ? <Text style={styles.formErrorText}>{jobFormError}</Text> : null}
               <Text style={styles.inputLabel}>CLIENTE / CANTIERE</Text>
               <TextInput
                 style={styles.input}
@@ -1491,8 +1605,8 @@ export default function App() {
                     }} />
                 </View>
               </View>
-              <Text style={styles.inputLabel}>COMPENSO TOTALE (€)</Text>
-              <TextInput style={styles.input} keyboardType="numeric" placeholder="150" value={jobForm.income}
+              <Text style={styles.inputLabel}>COMPENSO TOTALE (€) <Text style={{ color:"#94a3b8", fontWeight:"normal" }}>— opzionale</Text></Text>
+              <TextInput style={styles.input} keyboardType="numeric" placeholder="Lascia vuoto per appuntamento" value={jobForm.income}
                 onFocus={() => setShowClientSugg(false)}
                 onChangeText={(t) => setJobForm({...jobForm, income:t})} />
 
@@ -1558,8 +1672,8 @@ export default function App() {
                 </TouchableOpacity>
               </View>
 
-              <TouchableOpacity style={styles.submitBtn} onPress={handleSaveJob}>
-                <Text style={styles.submitBtnText}>{editingJob ? "Aggiorna Lavoro" : "Salva Lavoro"}</Text>
+              <TouchableOpacity style={[styles.submitBtn, isSaving && { opacity:0.6 }]} onPress={handleSaveJob} disabled={isSaving}>
+                {isSaving ? <ActivityIndicator color="white" size="small" /> : <Text style={styles.submitBtnText}>{editingJob ? "Aggiorna Lavoro" : "Salva Lavoro"}</Text>}
               </TouchableOpacity>
             </ScrollView>
           </View>
@@ -1573,10 +1687,10 @@ export default function App() {
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Nuova Spesa / Transazione</Text>
-              <TouchableOpacity onPress={() => setIsExpenseModalOpen(false)} style={styles.closeBtn}><X color="#64748b" size={20} /></TouchableOpacity>
+              <TouchableOpacity onPress={() => { setIsExpenseModalOpen(false); setExpenseFormError(""); }} style={styles.closeBtn}><X color="#64748b" size={20} /></TouchableOpacity>
             </View>
             <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-              {/* Date picker */}
+              {expenseFormError ? <Text style={styles.formErrorText}>{expenseFormError}</Text> : null}
               <Text style={styles.inputLabel}>DATA</Text>
               <View style={styles.datePicker}>
                 <TouchableOpacity onPress={() => { const d = new Date(expenseForm.date); d.setDate(d.getDate()-1); setExpenseForm({...expenseForm, date:d}); }}>
@@ -1631,8 +1745,8 @@ export default function App() {
                 </View>
               </ScrollView>
 
-              <TouchableOpacity style={[styles.submitBtn, { backgroundColor:"#1e293b" }]} onPress={handleSaveExpense}>
-                <Text style={styles.submitBtnText}>Registra</Text>
+              <TouchableOpacity style={[styles.submitBtn, { backgroundColor:"#1e293b" }, isSaving && { opacity:0.6 }]} onPress={handleSaveExpense} disabled={isSaving}>
+                {isSaving ? <ActivityIndicator color="white" size="small" /> : <Text style={styles.submitBtnText}>Registra</Text>}
               </TouchableOpacity>
             </ScrollView>
           </View>
@@ -1698,9 +1812,9 @@ export default function App() {
                 onChangeText={(t) => setDeadlineForm({...deadlineForm, notes:t})} />
 
               <TouchableOpacity
-                style={[styles.submitBtn, { backgroundColor: deadlineForm.title.trim() ? "#4f46e5":"#94a3b8" }]}
-                onPress={handleSaveDeadline} disabled={!deadlineForm.title.trim()}>
-                <Text style={styles.submitBtnText}>{editingDeadline ? "Aggiorna" : "Salva Scadenza"}</Text>
+                style={[styles.submitBtn, { backgroundColor: deadlineForm.title.trim() ? "#4f46e5":"#94a3b8" }, isSaving && { opacity:0.6 }]}
+                onPress={handleSaveDeadline} disabled={!deadlineForm.title.trim() || isSaving}>
+                {isSaving ? <ActivityIndicator color="white" size="small" /> : <Text style={styles.submitBtnText}>{editingDeadline ? "Aggiorna" : "Salva Scadenza"}</Text>}
               </TouchableOpacity>
             </ScrollView>
           </View>
@@ -1816,6 +1930,7 @@ const styles = StyleSheet.create({
   dayTextToday: { color:"#b45309" },
   jobsListPreview: { flex:1, marginTop:2, overflow:"hidden" },
   jobBadge: { backgroundColor:"#d97706", borderRadius:3, paddingHorizontal:3, paddingVertical:1, marginBottom:1 },
+  appointmentBadge: { backgroundColor:"#3b82f6", borderRadius:3, paddingHorizontal:3, paddingVertical:1, marginBottom:1 },
   jobBadgeText: { color:"white", fontSize:7 },
 
   // Expense dots
@@ -1915,6 +2030,17 @@ const styles = StyleSheet.create({
   periodChipActive: { backgroundColor:"white" },
   periodChipText: { color:"rgba(255,255,255,0.8)", fontSize:11, fontWeight:"bold" },
   periodChipTextActive: { color:"#0f172a" },
+
+  // Offline banner
+  offlineBanner: { backgroundColor:"#475569", flexDirection:"row", alignItems:"center", justifyContent:"center", paddingVertical:7, paddingHorizontal:16, gap:8 },
+  offlineBannerText: { color:"white", fontSize:12, fontWeight:"600", flexShrink:1 },
+
+  // Form validation error
+  formErrorText: { backgroundColor:"#fee2e2", color:"#dc2626", fontSize:13, fontWeight:"600", borderRadius:10, padding:12, marginBottom:8 },
+
+  // Export & profile buttons
+  exportBtn: { flexDirection:"row", alignItems:"center", backgroundColor:"#ede9fe", paddingHorizontal:24, paddingVertical:12, borderRadius:12, marginTop:12 },
+  exportBtnText: { color:"#4f46e5", fontWeight:"bold", fontSize:15 },
 
   // Deadlines tab
   deadlineSectionLabel: { fontSize:11, fontWeight:"bold", color:"#94a3b8", marginBottom:8, marginTop:4, letterSpacing:0.5 },

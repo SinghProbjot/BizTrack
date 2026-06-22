@@ -2,7 +2,7 @@
   "expo": {
     "name": "BizTrack",
     "slug": "BizTrack",
-    "version": "1.0.0",
+    "version": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "biztrack",
@@ -18,7 +18,8 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.probjot.BizTrack"
+      "package": "com.probjot.BizTrack",
+      "versionCode": 1
     },
     "web": {
       "output": "static",
@@ -26,6 +27,16 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "extraGradleProperties": {
+              "org.gradle.parallel": "false"
+            }
+          }
+        }
+      ],
       [
         "expo-splash-screen",
         {

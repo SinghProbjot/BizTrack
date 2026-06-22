@@ -1,0 +1,65 @@
+diff --git a/node_modules/react-native-reanimated/android/CMakeLists.txt b/node_modules/react-native-reanimated/android/CMakeLists.txt
+index c4e4df9..31bb00c 100644
+--- a/node_modules/react-native-reanimated/android/CMakeLists.txt
++++ b/node_modules/react-native-reanimated/android/CMakeLists.txt
+@@ -73,10 +73,20 @@ target_include_directories(
+ 
+ set_target_properties(reanimated PROPERTIES LINKER_LANGUAGE CXX)
+ 
+-if(${CMAKE_BUILD_TYPE} MATCHES "Debug")
+-  set(BUILD_TYPE "debug")
++# AGP 8.x outputs .so to cxx/<variant>/<hash>/obj/<abi>/ — use glob to find it
++# regardless of the hash or whether it's in cmake/ or cxx/ subdirectory.
++file(GLOB WORKLETS_SO_CANDIDATES
++  "${REACT_NATIVE_WORKLETS_DIR}/android/build/intermediates/cmake/RelWithDebInfo/obj/${ANDROID_ABI}/libworklets.so"
++  "${REACT_NATIVE_WORKLETS_DIR}/android/build/intermediates/cmake/release/obj/${ANDROID_ABI}/libworklets.so"
++  "${REACT_NATIVE_WORKLETS_DIR}/android/build/intermediates/cmake/debug/obj/${ANDROID_ABI}/libworklets.so"
++  "${REACT_NATIVE_WORKLETS_DIR}/android/build/intermediates/cxx/RelWithDebInfo/*/obj/${ANDROID_ABI}/libworklets.so"
++  "${REACT_NATIVE_WORKLETS_DIR}/android/build/intermediates/cxx/Release/*/obj/${ANDROID_ABI}/libworklets.so"
++  "${REACT_NATIVE_WORKLETS_DIR}/android/build/intermediates/cxx/Debug/*/obj/${ANDROID_ABI}/libworklets.so"
++)
++if(WORKLETS_SO_CANDIDATES)
++  list(GET WORKLETS_SO_CANDIDATES 0 WORKLETS_SO_PATH)
+ else()
+-  set(BUILD_TYPE "release")
++  message(FATAL_ERROR "libworklets.so not found for ${ANDROID_ABI}. Build worklets before reanimated.")
+ endif()
+ 
+ add_library(worklets SHARED IMPORTED)
+@@ -84,8 +94,7 @@ add_library(worklets SHARED IMPORTED)
+ set_target_properties(
+   worklets
+   PROPERTIES
+-    IMPORTED_LOCATION
+-    "${REACT_NATIVE_WORKLETS_DIR}/android/build/intermediates/cmake/${BUILD_TYPE}/obj/${ANDROID_ABI}/libworklets.so"
++    IMPORTED_LOCATION "${WORKLETS_SO_PATH}"
+ )
+ 
+ set_target_properties(reanimated PROPERTIES LINKER_LANGUAGE CXX)
+diff --git a/node_modules/react-native-reanimated/android/build.gradle b/node_modules/react-native-reanimated/android/build.gradle
+index 6b73a69..126ab84 100644
+--- a/node_modules/react-native-reanimated/android/build.gradle
++++ b/node_modules/react-native-reanimated/android/build.gradle
+@@ -362,5 +362,22 @@ if (project != rootProject) {
+     afterEvaluate {
+         tasks.getByName("externalNativeBuildDebug").dependsOn(findProject(":react-native-worklets").tasks.getByName("externalNativeBuildDebug"))
+         tasks.getByName("externalNativeBuildRelease").dependsOn(findProject(":react-native-worklets").tasks.getByName("externalNativeBuildRelease"))
++        // Fix for Gradle 8.10+: worklets must be BUILT before reanimated is even CONFIGURED
++        // because CMakeLists.txt uses file(GLOB) at configure time to locate libworklets.so.
++        def workletsProj = findProject(":react-native-worklets")
++        if (workletsProj != null) {
++            tasks.configureEach { reaTask ->
++                if (reaTask.name.startsWith("buildCMakeRelWithDebInfo") ||
++                    reaTask.name.startsWith("configureCMakeRelWithDebInfo")) {
++                    def m = (reaTask.name =~ /[a-zA-Z]+CMakeRelWithDebInfo\[([^\]]+)\]/)
++                    if (m.find()) {
++                        def abi = m.group(1)
++                        try {
++                            reaTask.dependsOn(workletsProj.tasks.named("buildCMakeRelWithDebInfo[${abi}][worklets]"))
++                        } catch (Exception ignored) {}
++                    }
++                }
++            }
++        }
+     }
+ }
